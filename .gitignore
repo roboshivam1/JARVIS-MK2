@@ -1,0 +1,6 @@
+jarvis_env/
+
+.env
+
+memory/pending_transcript.txt
+logs/
