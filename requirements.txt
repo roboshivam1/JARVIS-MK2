@@ -1,0 +1,44 @@
+# =============================================================================
+# JARVIS MK2 — Requirements
+# Install with: pip install -r requirements.txt
+# =============================================================================
+
+# ── LLM Providers ─────────────────────────────────────────────────────────────
+google-generativeai     # Current provider (works with UPI)
+anthropic               # Future provider (add API key when available)
+openai                  # Alternative provider
+ollama                  # Local model client (agents run locally)
+
+# ── Speech I/O ────────────────────────────────────────────────────────────────
+groq                    # Groq API client — Whisper STT
+sounddevice             # Microphone capture
+numpy                   # Audio array processing
+pynput                  # Keyboard listener for push-to-talk
+kokoro-onnx             # Primary TTS engine (high quality, local)
+soundfile               # Write WAV files for Kokoro output
+
+# ── Web Agent ─────────────────────────────────────────────────────────────────
+duckduckgo-search       # Web search (no API key required)
+requests                # HTTP requests for page fetching
+beautifulsoup4          # HTML parsing and text extraction
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv           # Load .env file for API keys
+
+# =============================================================================
+# POST-INSTALL STEPS:
+#
+# 1. Pull local Ollama models:
+#      ollama pull llama3.1:8b
+#      ollama pull llava            (for screen analysis)
+#
+# 2. Download Kokoro model files:
+#      python -c "from kokoro_onnx import Kokoro; Kokoro.from_pretrained()"
+#
+# 3. Create your .env file:
+#      GOOGLE_API_KEY=AIza...
+#      GROQ_API_KEY=gsk_...
+#
+# 4. Run:
+#      python main.py
+# =============================================================================
