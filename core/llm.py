@@ -1,38 +1,34 @@
 # =============================================================================
-# core/llm.py — The LLM Abstraction Layer
+# core/llm.py — Provider-Agnostic LLM Abstraction Layer
 # =============================================================================
 #
-# WHY THIS FILE EXISTS:
-# Every LLM provider (Google, Anthropic, OpenAI) has a completely different
-# Python SDK with different method names, message formats, tool schemas,
-# and response structures. Without this file, every agent and the orchestrator
-# would contain provider-specific code scattered everywhere.
+# PUBLIC INTERFACE — the only three functions the rest of JARVIS calls:
 #
-# This file implements the PROVIDER PATTERN — a single consistent interface
-# that the rest of JARVIS talks to. Swap the provider here, nothing else
-# changes. The orchestrator, planner, and every agent call the same three
-# functions regardless of which company's model is running underneath.
+#   chat(messages, model, provider, max_tokens)
+#       Conversation in, text response out.
 #
-# THE THREE CALL SHAPES:
-# Every LLM interaction in JARVIS is one of:
-#   1. chat()       — conversation history in, text response out
-#   2. tool_call()  — conversation + tool schemas in, tool decisions out
-#   3. structured() — prompt in, guaranteed parsed JSON out
+#   tool_call(messages, tools, model, provider, max_tokens)
+#       Conversation + tool schemas in, tool decision or text out.
 #
-# CURRENT STATE:
-#   Provider: Google Gemini (works with UPI, no international card needed)
-#   Orchestrator model: gemini-2.0-flash
-#   Agent model: llama3.1:8b (local Ollama — unchanged)
+#   structured(prompt, schema_hint, model, provider, max_tokens)
+#       Prompt in, guaranteed parsed Python dict out.
 #
-# SWITCHING TO ANTHROPIC LATER:
-#   1. pip install anthropic
-#   2. Add ANTHROPIC_API_KEY to .env
-#   3. In config.py: set ACTIVE_PROVIDER = "anthropic"
-#   4. That's it. Zero other changes needed.
+# CONVENIENCE WRAPPERS for agents (always use local Ollama):
 #
-# SWITCHING TO OPENAI:
-#   Same process — set ACTIVE_PROVIDER = "openai"
+#   agent_chat(messages, max_tokens)
+#   agent_tool_call(messages, tools, max_tokens)
 #
+# SWITCHING PROVIDERS:
+#   Change ACTIVE_PROVIDER in config.py — nothing else needs to change.
+#   "google"    → google.genai (current, works with UPI)
+#   "anthropic" → anthropic SDK
+#   "openai"    → openai SDK
+#   "ollama"    → local Ollama
+#
+# GOOGLE SDK NOTE:
+#   This file uses `google.genai` (the new SDK, package: google-genai).
+#   The old `google.generativeai` package is deprecated and no longer
+#   receives updates. Install with: pip install google-genai
 # =============================================================================
 
 from __future__ import annotations
@@ -41,9 +37,10 @@ import json
 import re
 from typing import Any
 
-# ── Google Gemini ─────────────────────────────────────────────────────────────
+# ── Google Gemini (new SDK) ───────────────────────────────────────────────────
 try:
-    import google.generativeai as genai
+    from google import genai as google_genai
+    from google.genai import types as google_types
     GOOGLE_AVAILABLE = True
 except ImportError:
     GOOGLE_AVAILABLE = False
@@ -80,29 +77,23 @@ from config import (
 
 
 # =============================================================================
-# LLMResponse — The Unified Response Object
+# LLMResponse — Unified Return Object
 # =============================================================================
 #
 # Every call to this module returns an LLMResponse regardless of provider.
-# This means the orchestrator never needs to know whether the response came
-# from Google or Anthropic — it always accesses the same fields.
+# The caller never needs to know which SDK produced the response.
 #
-# Fields:
-#   text        — the model's text reply (None if it chose to call tools instead)
-#   tool_calls  — list of tool call dicts if model requested tools (else empty list)
-#   raw         — the original provider response object, in case you need it
-#
-# A response will have EITHER text OR tool_calls populated, rarely both.
-# This mirrors how LLMs actually work — they either reply in text or request
-# a tool call. They don't usually do both in one response.
+#   text        — model's text reply (None if it called a tool instead)
+#   tool_calls  — list of {"name": str, "arguments": dict} if tools requested
+#   raw         — original provider response object (escape hatch)
 # =============================================================================
 
 class LLMResponse:
     def __init__(
         self,
-        text: str | None           = None,
-        tool_calls: list[dict]     = None,
-        raw: Any                   = None,
+        text:       str | None       = None,
+        tool_calls: list[dict]       = None,
+        raw:        Any              = None,
     ):
         self.text       = text
         self.tool_calls = tool_calls or []
@@ -125,206 +116,211 @@ class LLMResponse:
 
 
 # =============================================================================
-# Message Format
-# =============================================================================
-#
-# Internally we use a simple, provider-agnostic message format:
-#   {"role": "user" | "assistant" | "tool", "content": "..."}
-#
-# Each provider adapter converts this to their own format before calling
-# the API, and converts the response back to LLMResponse.
-#
-# This dict format is close to the OpenAI/Anthropic standard, which makes
-# the adapters simple. Google is the odd one out — it uses a different
-# structure — so the Google adapter does the most conversion work.
-# =============================================================================
-
-
-# =============================================================================
 # Provider Initialisation
 # =============================================================================
 
-def _init_google():
+def _get_google_client():
+    """Returns an initialised google.genai Client."""
     if not GOOGLE_AVAILABLE:
         raise ImportError(
-            "google-generativeai not installed. Run: pip install google-generativeai"
+            "google-genai not installed. Run: pip install google-genai"
         )
     if not GOOGLE_API_KEY:
         raise EnvironmentError("GOOGLE_API_KEY not set in .env")
-    genai.configure(api_key=GOOGLE_API_KEY)
+    return google_genai.Client(api_key=GOOGLE_API_KEY)
 
 
-def _init_anthropic():
+def _get_anthropic_client():
     if not ANTHROPIC_AVAILABLE:
-        raise ImportError(
-            "anthropic not installed. Run: pip install anthropic"
-        )
+        raise ImportError("anthropic not installed. Run: pip install anthropic")
     if not ANTHROPIC_API_KEY:
         raise EnvironmentError("ANTHROPIC_API_KEY not set in .env")
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def _init_openai():
+def _get_openai_client():
     if not OPENAI_AVAILABLE:
-        raise ImportError(
-            "openai not installed. Run: pip install openai"
-        )
+        raise ImportError("openai not installed. Run: pip install openai")
     if not OPENAI_API_KEY:
         raise EnvironmentError("OPENAI_API_KEY not set in .env")
     return openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
 # =============================================================================
-# Tool Schema Conversion
-# =============================================================================
+# Google Format Converters
 #
-# WHY THIS IS NEEDED:
-# Different providers require tool/function schemas in different formats.
-# Our internal format (matching Anthropic/OpenAI) looks like:
-#   {
-#     "type": "function",
-#     "function": {
-#       "name": "search_web",
-#       "description": "...",
-#       "parameters": { "type": "object", "properties": {...} }
-#     }
-#   }
-#
-# Google Gemini expects a completely different structure using their own
-# FunctionDeclaration objects. The converters below handle this translation
-# so the agents can define tools once in the standard format and use them
-# with any provider.
+# The new google.genai SDK uses a different structure than the old one:
+#   - Client is instantiated with api_key, not configured globally
+#   - System instruction goes into GenerateContentConfig, not the model init
+#   - Messages use Content(role, parts=[Part(text=...)]) objects
+#   - Tool schemas use FunctionDeclaration inside Tool inside a config
+#   - "assistant" role is "model" in Google's convention
 # =============================================================================
+
+def _messages_to_google(
+    messages: list[dict],
+) -> tuple[str | None, list]:
+    """
+    Splits our standard message list into:
+      - system_instruction (str | None) — extracted from role="system" message
+      - contents (list) — remaining messages as google_types.Content objects
+
+    Google's API takes the system instruction separately from the conversation
+    history, so we need to pull it out before building the contents list.
+    """
+    system_instruction = None
+    contents           = []
+
+    for msg in messages:
+        role    = msg["role"]
+        content = msg.get("content", "") or ""
+
+        if role == "system":
+            system_instruction = content
+            continue
+
+        # Google uses "model" for assistant turns
+        google_role = "model" if role == "assistant" else "user"
+
+        if isinstance(content, str) and content.strip():
+            contents.append(
+                google_types.Content(
+                    role=google_role,
+                    parts=[google_types.Part(text=content)],
+                )
+            )
+        elif role == "tool":
+            # Tool results get wrapped as user-side context
+            contents.append(
+                google_types.Content(
+                    role="user",
+                    parts=[google_types.Part(text=f"[Tool result]: {content}")],
+                )
+            )
+
+    return system_instruction, contents
+
 
 def _tools_to_google(tools: list[dict]) -> list:
     """
-    Converts our standard tool schema list into Google's FunctionDeclaration
-    format. Returns a list of genai.Tool objects.
+    Converts our standard tool schema list into a list containing one
+    google_types.Tool object with all FunctionDeclarations inside it.
+
+    Our standard format:
+        [{"type": "function", "function": {"name": ..., "parameters": ...}}]
+
+    Google's format:
+        [Tool(function_declarations=[FunctionDeclaration(name=..., parameters=Schema(...))])]
     """
     if not tools:
         return []
 
     declarations = []
     for tool in tools:
-        fn     = tool.get("function", tool)  # handle both wrapped and unwrapped
-        name   = fn["name"]
+        fn     = tool.get("function", tool)
+        name   = fn.get("name", "")
         desc   = fn.get("description", "")
         params = fn.get("parameters", {"type": "object", "properties": {}})
 
+        # Build property schemas
+        properties = {}
+        for prop_name, prop_info in params.get("properties", {}).items():
+            type_str = prop_info.get("type", "string")
+
+            # Handle array type with items
+            if type_str == "array":
+                items_schema = google_types.Schema(
+                    type=_str_to_google_type("string")
+                )
+                if isinstance(prop_info.get("items"), dict):
+                    items_schema = google_types.Schema(
+                        type=_str_to_google_type(
+                            prop_info["items"].get("type", "string")
+                        )
+                    )
+                properties[prop_name] = google_types.Schema(
+                    type=google_types.Type.ARRAY,
+                    description=prop_info.get("description", ""),
+                    items=items_schema,
+                )
+            else:
+                schema_kwargs = dict(
+                    type=_str_to_google_type(type_str),
+                    description=prop_info.get("description", ""),
+                )
+                # Handle enum values if present
+                if "enum" in prop_info:
+                    schema_kwargs["enum"] = prop_info["enum"]
+
+                properties[prop_name] = google_types.Schema(**schema_kwargs)
+
+        param_schema = google_types.Schema(
+            type=google_types.Type.OBJECT,
+            properties=properties,
+            required=params.get("required", []),
+        )
+
         declarations.append(
-            genai.protos.FunctionDeclaration(
+            google_types.FunctionDeclaration(
                 name=name,
                 description=desc,
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        k: genai.protos.Schema(
-                            type=_python_type_to_google(v.get("type", "string")),
-                            description=v.get("description", ""),
-                        )
-                        for k, v in params.get("properties", {}).items()
-                    },
-                    required=params.get("required", []),
-                ),
+                parameters=param_schema,
             )
         )
 
-    return [genai.Tool(function_declarations=declarations)]
+    return [google_types.Tool(function_declarations=declarations)]
 
 
-def _python_type_to_google(type_str: str):
-    """Maps JSON schema type strings to Google's Type enum."""
+def _str_to_google_type(type_str: str):
+    """Maps JSON schema type strings to google_types.Type enum values."""
     mapping = {
-        "string":  genai.protos.Type.STRING,
-        "integer": genai.protos.Type.INTEGER,
-        "number":  genai.protos.Type.NUMBER,
-        "boolean": genai.protos.Type.BOOLEAN,
-        "array":   genai.protos.Type.ARRAY,
-        "object":  genai.protos.Type.OBJECT,
+        "string":  google_types.Type.STRING,
+        "integer": google_types.Type.INTEGER,
+        "number":  google_types.Type.NUMBER,
+        "boolean": google_types.Type.BOOLEAN,
+        "array":   google_types.Type.ARRAY,
+        "object":  google_types.Type.OBJECT,
     }
-    return mapping.get(type_str, genai.protos.Type.STRING)
-
-
-def _messages_to_google(messages: list[dict]) -> tuple[str | None, list]:
-    """
-    Converts our standard message list into Google's format.
-
-    Google separates the system prompt from the conversation history.
-    It also uses "model" instead of "assistant" for the role name, and
-    uses a Content/Part structure instead of plain dicts.
-
-    Returns: (system_instruction_str, google_history_list)
-    """
-    system_instruction = None
-    history            = []
-
-    for msg in messages:
-        role    = msg["role"]
-        content = msg.get("content", "")
-
-        # Google takes system prompt separately, not as a message
-        if role == "system":
-            system_instruction = content
-            continue
-
-        # Google uses "model" not "assistant"
-        google_role = "model" if role == "assistant" else "user"
-
-        # Convert to Google's Content structure
-        if isinstance(content, str):
-            history.append({
-                "role":  google_role,
-                "parts": [{"text": content}],
-            })
-        # Tool result messages need special handling
-        elif role == "tool":
-            history.append({
-                "role":  "user",
-                "parts": [{"text": f"[Tool result]: {content}"}],
-            })
-
-    return system_instruction, history
+    return mapping.get(type_str, google_types.Type.STRING)
 
 
 def _parse_google_response(response) -> LLMResponse:
     """
-    Parses a Google GenerateContentResponse into our unified LLMResponse.
-    Handles both text responses and function call responses.
+    Converts a google.genai GenerateContentResponse into our LLMResponse.
+
+    Checks for function calls first (tool use), then falls back to text.
+    Handles multi-part responses by concatenating all text parts.
     """
-    candidate = response.candidates[0]
-    part       = candidate.content.parts[0]
+    try:
+        candidate = response.candidates[0]
+        parts      = candidate.content.parts
 
-    # Check if this is a function call response
-    if hasattr(part, "function_call") and part.function_call.name:
-        fc = part.function_call
-        return LLMResponse(
-            tool_calls=[{
-                "name":      fc.name,
-                "arguments": dict(fc.args),
-            }],
-            raw=response,
+        # Check for function call in any part
+        for part in parts:
+            if hasattr(part, "function_call") and part.function_call:
+                fc = part.function_call
+                # fc.args is a MapComposite — convert to plain dict
+                arguments = dict(fc.args) if fc.args else {}
+                return LLMResponse(
+                    tool_calls=[{"name": fc.name, "arguments": arguments}],
+                    raw=response,
+                )
+
+        # No function call — concatenate all text parts
+        text = "".join(
+            part.text for part in parts
+            if hasattr(part, "text") and part.text
         )
+        return LLMResponse(text=text.strip(), raw=response)
 
-    # Otherwise it's a text response
-    text = ""
-    for p in candidate.content.parts:
-        if hasattr(p, "text"):
-            text += p.text
-
-    return LLMResponse(text=text.strip(), raw=response)
+    except (IndexError, AttributeError) as e:
+        # Malformed response — return empty text rather than crashing
+        return LLMResponse(text="", raw=response)
 
 
 # =============================================================================
-# Core Public Functions
+# Public Interface — The Three Core Functions
 # =============================================================================
-#
-# These three functions are the ENTIRE public interface of this module.
-# Everything else in JARVIS imports from here and calls only these.
-#
-# Usage:
-#   from core.llm import chat, tool_call, structured
-# =============================================================================
-
 
 def chat(
     messages:   list[dict],
@@ -334,15 +330,12 @@ def chat(
 ) -> LLMResponse:
     """
     Send a conversation and get a text response.
-    Use this for: orchestrator responses, agent summaries, TTS text generation.
 
     Args:
-        messages:   List of {"role": ..., "content": ...} dicts.
-                    Include {"role": "system", "content": ...} as the first
-                    message for the system prompt.
-        model:      Override the default model. If None, uses ORCHESTRATOR_MODEL
-                    from config.
-        provider:   Override the active provider. If None, uses ACTIVE_PROVIDER.
+        messages:   List of {"role": "system"|"user"|"assistant", "content": str}
+        model:      Model identifier. Defaults to ORCHESTRATOR_MODEL.
+        provider:   "google", "anthropic", "openai", or "ollama".
+                    Defaults to ACTIVE_PROVIDER from config.
         max_tokens: Maximum tokens in the response.
 
     Returns:
@@ -360,7 +353,10 @@ def chat(
     elif _provider == "ollama":
         return _ollama_chat(messages, _model)
     else:
-        raise ValueError(f"Unknown provider: {_provider!r}. Choose from: google, anthropic, openai, ollama")
+        raise ValueError(
+            f"Unknown provider {_provider!r}. "
+            f"Choose from: google, anthropic, openai, ollama"
+        )
 
 
 def tool_call(
@@ -371,21 +367,10 @@ def tool_call(
     max_tokens: int  = 1024,
 ) -> LLMResponse:
     """
-    Send a conversation with available tools and get back either a tool
-    call decision OR a text response (if the model decides no tool is needed).
+    Send a conversation with tool schemas and get back a tool decision or text.
 
-    Use this for: agent execution loops, orchestrator delegation calls.
-
-    Args:
-        messages:   Conversation history including system prompt.
-        tools:      List of tool schemas in standard format.
-        model:      Override model. Defaults to ORCHESTRATOR_MODEL.
-        provider:   Override provider. Defaults to ACTIVE_PROVIDER.
-        max_tokens: Max response tokens.
-
-    Returns:
-        LLMResponse with either .tool_calls or .text populated.
-        Check .has_tool_calls to decide which path to take.
+    Returns LLMResponse with either .tool_calls or .text populated.
+    Check .has_tool_calls to decide which to use.
     """
     _provider = provider or ACTIVE_PROVIDER
     _model    = model    or ORCHESTRATOR_MODEL
@@ -399,35 +384,27 @@ def tool_call(
     elif _provider == "ollama":
         return _ollama_tool_call(messages, tools, _model)
     else:
-        raise ValueError(f"Unknown provider: {_provider!r}")
+        raise ValueError(f"Unknown provider {_provider!r}")
 
 
 def structured(
-    prompt:     str,
-    schema_hint: str = "",
-    model:      str  = None,
-    provider:   str  = None,
-    max_tokens: int  = 1024,
+    prompt:      str,
+    schema_hint: str  = "",
+    model:       str  = None,
+    provider:    str  = None,
+    max_tokens:  int  = 1024,
 ) -> dict:
     """
-    Send a prompt and get back a guaranteed parsed JSON dict.
-    Use this for: Planner (task graph), memory consolidation extraction.
+    Send a prompt and get back a guaranteed parsed Python dict.
 
-    Unlike chat() and tool_call() which return LLMResponse objects,
-    this returns a plain Python dict because the caller always needs
-    structured data, not a response object.
-
-    Args:
-        prompt:      The full prompt including any examples or schema instructions.
-        schema_hint: Optional description of the expected JSON structure,
-                     appended to the prompt to help the model.
-        model:       Override model.
-        provider:    Override provider.
-        max_tokens:  Max response tokens.
+    Appends JSON-only instructions to the prompt, then attempts to parse
+    the response through three increasingly lenient strategies before giving up.
 
     Returns:
-        Parsed dict. Raises ValueError if response cannot be parsed as JSON
-        after cleanup attempts.
+        Parsed dict.
+
+    Raises:
+        ValueError if the response cannot be parsed as JSON after all attempts.
     """
     _provider = provider or ACTIVE_PROVIDER
     _model    = model    or ORCHESTRATOR_MODEL
@@ -449,21 +426,17 @@ def structured(
     elif _provider == "ollama":
         response = _ollama_chat(messages, _model, json_mode=True)
     else:
-        raise ValueError(f"Unknown provider: {_provider!r}")
+        raise ValueError(f"Unknown provider {_provider!r}")
 
     return _parse_json_response(response.text or "")
 
 
 # =============================================================================
-# Agent-Specific Convenience Wrapper
+# Agent Convenience Wrappers
 # =============================================================================
 
 def agent_chat(messages: list[dict], max_tokens: int = 1024) -> LLMResponse:
-    """
-    Convenience wrapper that always uses the AGENT_MODEL and ollama provider.
-    Use this inside specialist agents (web_agent, memory_agent, etc.) for
-    their internal reasoning — keeps them local and free.
-    """
+    """Always uses the local Ollama AGENT_MODEL. Use inside specialist agents."""
     return chat(messages, model=AGENT_MODEL, provider="ollama", max_tokens=max_tokens)
 
 
@@ -472,14 +445,17 @@ def agent_tool_call(
     tools:      list[dict],
     max_tokens: int = 1024,
 ) -> LLMResponse:
-    """
-    Convenience wrapper for agent tool calls — always uses local Ollama.
-    """
-    return tool_call(messages, tools, model=AGENT_MODEL, provider="ollama", max_tokens=max_tokens)
+    """Always uses the local Ollama AGENT_MODEL. Use inside specialist agents."""
+    return tool_call(
+        messages, tools,
+        model=AGENT_MODEL,
+        provider="ollama",
+        max_tokens=max_tokens,
+    )
 
 
 # =============================================================================
-# Google Gemini Adapters
+# Google Gemini Adapters (google.genai — new SDK)
 # =============================================================================
 
 def _google_chat(
@@ -488,29 +464,31 @@ def _google_chat(
     max_tokens: int,
     json_mode:  bool = False,
 ) -> LLMResponse:
-    _init_google()
-    system_instruction, history = _messages_to_google(messages)
+    """
+    Chat call using the new google.genai SDK.
 
-    generation_config = genai.GenerationConfig(
-        max_output_tokens=max_tokens,
-        response_mime_type="application/json" if json_mode else "text/plain",
+    Key differences from old SDK:
+    - Client instantiated with api_key, not global configure()
+    - System instruction goes into GenerateContentConfig
+    - Contents are typed Content objects, not plain dicts
+    - Single client.models.generate_content() call instead of
+      model.generate_content() or chat_session.send_message()
+    """
+    client                    = _get_google_client()
+    system_instruction, contents = _messages_to_google(messages)
+
+    config_kwargs = {"max_output_tokens": max_tokens}
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+    if json_mode:
+        config_kwargs["response_mime_type"] = "application/json"
+
+    config   = google_types.GenerateContentConfig(**config_kwargs)
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
     )
-
-    client = genai.GenerativeModel(
-        model_name=model,
-        system_instruction=system_instruction,
-        generation_config=generation_config,
-    )
-
-    # Start a chat session with history (all but the last message)
-    # then send the last message as the current turn
-    if len(history) > 1:
-        chat_session = client.start_chat(history=history[:-1])
-        last_message = history[-1]["parts"][0]["text"]
-        response     = chat_session.send_message(last_message)
-    else:
-        last_message = history[0]["parts"][0]["text"] if history else ""
-        response     = client.generate_content(last_message)
 
     return _parse_google_response(response)
 
@@ -521,24 +499,35 @@ def _google_tool_call(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    _init_google()
-    system_instruction, history = _messages_to_google(messages)
-    google_tools = _tools_to_google(tools)
+    """
+    Tool call using the new google.genai SDK.
 
-    client = genai.GenerativeModel(
-        model_name=model,
-        system_instruction=system_instruction,
-        tools=google_tools,
-        generation_config=genai.GenerationConfig(max_output_tokens=max_tokens),
+    Tools are passed inside GenerateContentConfig rather than as a
+    separate constructor argument (as in the old SDK).
+    AUTO mode lets the model decide when to call tools vs respond in text.
+    """
+    client                       = _get_google_client()
+    system_instruction, contents = _messages_to_google(messages)
+    google_tools                 = _tools_to_google(tools)
+
+    config_kwargs = {
+        "max_output_tokens": max_tokens,
+        "tools":             google_tools,
+        "tool_config":       google_types.ToolConfig(
+            function_calling_config=google_types.FunctionCallingConfig(
+                mode="AUTO"
+            )
+        ),
+    }
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+
+    config   = google_types.GenerateContentConfig(**config_kwargs)
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
     )
-
-    if len(history) > 1:
-        chat_session = client.start_chat(history=history[:-1])
-        last_message = history[-1]["parts"][0]["text"]
-        response     = chat_session.send_message(last_message)
-    else:
-        last_message = history[0]["parts"][0]["text"] if history else ""
-        response     = client.generate_content(last_message)
 
     return _parse_google_response(response)
 
@@ -552,16 +541,15 @@ def _anthropic_chat(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client = _init_anthropic()
-
-    # Anthropic takes system prompt separately
-    system = ""
+    client   = _get_anthropic_client()
+    system   = ""
     filtered = []
+
     for msg in messages:
         if msg["role"] == "system":
-            system = msg["content"]
+            system = msg.get("content", "")
         else:
-            filtered.append({"role": msg["role"], "content": msg["content"]})
+            filtered.append({"role": msg["role"], "content": msg.get("content", "")})
 
     kwargs = dict(model=model, max_tokens=max_tokens, messages=filtered)
     if system:
@@ -578,17 +566,17 @@ def _anthropic_tool_call(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client = _init_anthropic()
-
+    client   = _get_anthropic_client()
     system   = ""
     filtered = []
+
     for msg in messages:
         if msg["role"] == "system":
-            system = msg["content"]
+            system = msg.get("content", "")
         else:
-            filtered.append({"role": msg["role"], "content": msg["content"]})
+            filtered.append({"role": msg["role"], "content": msg.get("content", "")})
 
-    # Anthropic tool schema is slightly different — extract the inner "function" dict
+    # Anthropic's tool schema format differs slightly from the OpenAI standard
     anthropic_tools = []
     for t in tools:
         fn = t.get("function", t)
@@ -598,13 +586,18 @@ def _anthropic_tool_call(
             "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
         })
 
-    kwargs = dict(model=model, max_tokens=max_tokens, messages=filtered, tools=anthropic_tools)
+    kwargs = dict(
+        model=model,
+        max_tokens=max_tokens,
+        messages=filtered,
+        tools=anthropic_tools,
+    )
     if system:
         kwargs["system"] = system
 
-    response    = client.messages.create(**kwargs)
-    tool_calls  = []
-    text        = ""
+    response   = client.messages.create(**kwargs)
+    tool_calls = []
+    text       = ""
 
     for block in response.content:
         if block.type == "tool_use":
@@ -612,11 +605,7 @@ def _anthropic_tool_call(
         elif block.type == "text":
             text += block.text
 
-    return LLMResponse(
-        text=text.strip() or None,
-        tool_calls=tool_calls,
-        raw=response,
-    )
+    return LLMResponse(text=text.strip() or None, tool_calls=tool_calls, raw=response)
 
 
 # =============================================================================
@@ -629,8 +618,7 @@ def _openai_chat(
     max_tokens: int,
     json_mode:  bool = False,
 ) -> LLMResponse:
-    client = _init_openai()
-
+    client = _get_openai_client()
     kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
@@ -646,8 +634,7 @@ def _openai_tool_call(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client = _init_openai()
-
+    client     = _get_openai_client()
     response   = client.chat.completions.create(
         model=model, max_tokens=max_tokens, messages=messages, tools=tools
     )
@@ -673,9 +660,9 @@ def _openai_tool_call(
 # =============================================================================
 
 def _ollama_chat(
-    messages:   list[dict],
-    model:      str,
-    json_mode:  bool = False,
+    messages:  list[dict],
+    model:     str,
+    json_mode: bool = False,
 ) -> LLMResponse:
     if not OLLAMA_AVAILABLE:
         raise ImportError("ollama not installed. Run: pip install ollama")
@@ -697,16 +684,17 @@ def _ollama_tool_call(
     if not OLLAMA_AVAILABLE:
         raise ImportError("ollama not installed. Run: pip install ollama")
 
-    response   = ollama.chat(model=model, messages=messages, tools=tools, stream=False)
-    message    = response.get("message", {})
-    raw_calls  = message.get("tool_calls", [])
-    tool_calls = []
+    response  = ollama.chat(model=model, messages=messages, tools=tools, stream=False)
+    message   = response.get("message", {})
+    raw_calls = message.get("tool_calls", [])
 
-    for tc in raw_calls:
-        tool_calls.append({
+    tool_calls = [
+        {
             "name":      tc["function"]["name"],
             "arguments": tc["function"]["arguments"],
-        })
+        }
+        for tc in raw_calls
+    ]
 
     return LLMResponse(
         text=message.get("content") or None,
@@ -721,23 +709,34 @@ def _ollama_tool_call(
 
 def _parse_json_response(raw: str) -> dict:
     """
-    Robustly parses a JSON string from an LLM response.
+    Parses a JSON string from an LLM response through three attempts:
+      1. Direct json.loads()
+      2. Strip markdown code fences then parse
+      3. Regex extract first {...} block then parse
 
-    LLMs sometimes wrap JSON in markdown code fences like:
-      ```json
-      {"key": "value"}
-      ```
-    This function handles that, plus trailing text after the JSON object,
-    plus minor formatting issues.
+    IMPORTANT: always returns a dict. If parsing succeeds but produces a
+    non-dict (e.g. the model returned the string "direct" as valid JSON),
+    that attempt is skipped and the next is tried. This prevents callers
+    from getting a string or list back when they expect a dict.
 
-    Raises ValueError with a clear message if parsing genuinely fails.
+    Raises ValueError with a clear message if all three fail.
     """
     if not raw.strip():
         raise ValueError("LLM returned an empty response when JSON was expected.")
 
+    def _load_as_dict(text: str):
+        """Parse text as JSON and return only if the result is a dict."""
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+        # Valid JSON but not a dict — reject and try next strategy
+        return None
+
     # Attempt 1: direct parse
     try:
-        return json.loads(raw)
+        result = _load_as_dict(raw)
+        if result is not None:
+            return result
     except json.JSONDecodeError:
         pass
 
@@ -745,19 +744,28 @@ def _parse_json_response(raw: str) -> dict:
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned).strip()
     try:
-        return json.loads(cleaned)
+        result = _load_as_dict(cleaned)
+        if result is not None:
+            return result
     except json.JSONDecodeError:
         pass
 
-    # Attempt 3: extract first JSON object/array using regex
-    match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
+    # Attempt 3: extract the first {...} block with regex
+    # Note: we only look for objects ({}), not arrays ([]),
+    # since callers always expect a dict
+    match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+    if not match:
+        # Try a greedy match for nested objects
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(1))
+            result = _load_as_dict(match.group(0))
+            if result is not None:
+                return result
         except json.JSONDecodeError:
             pass
 
     raise ValueError(
-        f"Could not parse LLM response as JSON after 3 attempts.\n"
-        f"Raw response (first 300 chars): {raw[:300]}"
+        f"Could not parse LLM response as a JSON object after 3 attempts.\n"
+        f"First 300 chars: {raw[:300]}"
     )

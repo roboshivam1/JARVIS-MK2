@@ -43,8 +43,8 @@ from agents.system_agent import SystemAgent
 from agents.music_agent import MusicAgent
 from agents.research_agent import ResearchAgent
 from core.orchestrator import Orchestrator
-from io.stt import SpeechToText
-from io.tts import TextToSpeech
+from in_out.stt import SpeechToText
+from in_out.tts import TextToSpeech
 
 
 # =============================================================================

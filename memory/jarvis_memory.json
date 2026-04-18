@@ -1,0 +1,49 @@
+{
+  "metadata": {
+    "created": "2026-04-18T10:36:01.108165",
+    "last_updated": "2026-04-18T18:39:55.234820",
+    "total_facts": 5
+  },
+  "memories": [
+    {
+      "fact": "The user is building JARVIS \u2014 a multi-agent AI assistant system.",
+      "category": "user_projects",
+      "added": "2026-04-18T10:36:01.108174",
+      "source": "conversation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "JARVIS uses specialist agents for different tasks: web_agent for internet search, memory_agent for recall, system_agent for macOS control, music_agent for playback, research_agent for deep research.",
+      "category": "system_context",
+      "added": "2026-04-18T10:36:01.108177",
+      "source": "conversation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is asking how Jarvis is.",
+      "category": "preferences",
+      "added": "2026-04-18T12:04:16.384138",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is working on a project called 'Life Jarvis'.",
+      "category": "projects",
+      "added": "2026-04-18T12:12:04.579309",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in the latest versions of Python.",
+      "category": "technical",
+      "added": "2026-04-18T18:39:55.234801",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    }
+  ]
+}

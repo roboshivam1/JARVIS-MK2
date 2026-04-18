@@ -75,7 +75,7 @@ if not GROQ_API_KEY:
 # -----------------------------------------------------------------------------
 
 # ── Current (Google) ──────────────────────────────────────────────────────────
-ORCHESTRATOR_MODEL = "gemini-2.0-flash"
+ORCHESTRATOR_MODEL = "gemini-2.5-flash"
 
 # ── Future (Anthropic) — swap these when you have the API key ─────────────────
 # ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
@@ -96,7 +96,7 @@ VISION_MODEL        = "llava"
 STT_MODEL       = "whisper-large-v3-turbo"
 STT_SAMPLE_RATE = 16000
 TTS_MODEL       = "kokoro"
-TTS_VOICE       = "af_sarah"
+TTS_VOICE       = "am_michael"
 TTS_FALLBACK    = "say"             # macOS built-in, zero-dependency fallback
 
 

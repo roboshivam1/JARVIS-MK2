@@ -4,7 +4,7 @@
 # =============================================================================
 
 # ── LLM Providers ─────────────────────────────────────────────────────────────
-google-generativeai     # Current provider (works with UPI)
+google-genai            # Current provider (works with UPI) — new SDK
 anthropic               # Future provider (add API key when available)
 openai                  # Alternative provider
 ollama                  # Local model client (agents run locally)

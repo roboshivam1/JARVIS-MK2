@@ -1,6 +1,16 @@
 jarvis_env/
+__pycache__/
+
+agents/__pycache__/
+core/__pycache__/
+memory/__pycache__/
+in_out/__pycache__/
+tools/__pycache__/
 
 .env
 
 memory/pending_transcript.txt
 logs/
+
+kokoro-v1.0.onnx
+voices-v1.0.bin
