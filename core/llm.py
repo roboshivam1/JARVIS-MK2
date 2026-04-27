@@ -293,7 +293,9 @@ def _parse_google_response(response) -> LLMResponse:
     """
     try:
         candidate = response.candidates[0]
-        parts      = candidate.content.parts
+        # content or content.parts can be None when Gemini hits SAFETY/MAX_TOKENS
+        content   = candidate.content if candidate else None
+        parts     = (content.parts if content else None) or []
 
         # Check for function call in any part
         for part in parts:
@@ -313,7 +315,7 @@ def _parse_google_response(response) -> LLMResponse:
         )
         return LLMResponse(text=text.strip(), raw=response)
 
-    except (IndexError, AttributeError) as e:
+    except (IndexError, AttributeError, TypeError) as e:
         # Malformed response — return empty text rather than crashing
         return LLMResponse(text="", raw=response)
 
@@ -684,17 +686,34 @@ def _ollama_tool_call(
     if not OLLAMA_AVAILABLE:
         raise ImportError("ollama not installed. Run: pip install ollama")
 
-    response  = ollama.chat(model=model, messages=messages, tools=tools, stream=False)
-    message   = response.get("message", {})
-    raw_calls = message.get("tool_calls", [])
+    response = ollama.chat(model=model, messages=messages, tools=tools, stream=False)
 
-    tool_calls = [
-        {
-            "name":      tc["function"]["name"],
-            "arguments": tc["function"]["arguments"],
-        }
-        for tc in raw_calls
-    ]
+    # Support both dict-style (older ollama lib) and object-style (newer lib)
+    if isinstance(response, dict):
+        message = response.get("message", {}) or {}
+    else:
+        msg = getattr(response, "message", None)
+        message = msg if isinstance(msg, dict) else (vars(msg) if msg else {})
+
+    # Use `or []` — NOT `.get("tool_calls", [])` — because Ollama sometimes
+    # returns {"tool_calls": None} when no tool is called. The default arg
+    # in .get() is only used when the key is ABSENT; it won't replace None.
+    raw_calls = message.get("tool_calls") or []
+
+    tool_calls = []
+    for tc in raw_calls:
+        fn = tc.get("function", tc)  # handle both {"function": {...}} and flat dicts
+        args = fn.get("arguments", {})
+        # Ollama may return arguments as a JSON string in older versions
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        tool_calls.append({
+            "name":      fn.get("name", ""),
+            "arguments": args,
+        })
 
     return LLMResponse(
         text=message.get("content") or None,

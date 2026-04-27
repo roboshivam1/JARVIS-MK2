@@ -6,11 +6,18 @@ core/__pycache__/
 memory/__pycache__/
 in_out/__pycache__/
 tools/__pycache__/
+logs___pycache__/
 
 .env
 
 memory/pending_transcript.txt
-logs/
+logs/conversation.log
+logs/full_history.txt
+logs/sessions.jsonl
 
 kokoro-v1.0.onnx
 voices-v1.0.bin
+
+testing/
+
+agents/browser_agent.py

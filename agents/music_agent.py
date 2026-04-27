@@ -2,15 +2,6 @@
 # agents/music_agent.py — Music Playback Specialist Agent
 # =============================================================================
 #
-#        d8888 8888888b.   .d88888b.  888      888      .d88888b. 
-#       d88888 888   Y88b d88P" "Y88b 888      888     d88P" "Y88b
-#      d88P888 888    888 888     888 888      888     888     888
-#     d88P 888 888   d88P 888     888 888      888     888     888
-#    d88P  888 8888888P"  888     888 888      888     888     888
-#   d88P   888 888        888     888 888      888     888     888
-#  d8888888888 888        Y88b. .d88P 888      888     Y88b. .d88P
-# d88P     888 888         "Y88888P"  88888888 88888888 "Y88888P" 
-#
 # WHAT THIS AGENT DOES:
 # Controls music playback entirely. Searches the iTunes/Apple Music catalog,
 # plays local library tracks and playlists, handles playback control (pause,
@@ -130,13 +121,17 @@ def play_playlist(playlist_name: str) -> str:
 
 def play_global_search(query: str) -> str:
     """
-    Searches the iTunes global catalog and plays the top result.
+    Searches the iTunes global catalog and plays the top result directly
+    in the Music app without requiring any manual interaction.
 
-    Uses the free iTunes Search API (no key required) to find a track,
-    then opens the Apple Music URL which macOS routes to the Music app.
-    This works for any song in the Apple Music catalog, not just the
-    user's local library.
+    Strategy:
+    1. Query iTunes Search API for track info and ID
+    2. Use itmss:// URL scheme to open directly in Music.app (not browser)
+    3. Use osascript to trigger play and confirm playback started
+    4. Verify the track is actually playing via now-playing check
     """
+    import time
+
     try:
         safe_query = urllib.parse.quote(query.replace(" ", "+"))
         url        = f"https://itunes.apple.com/search?term={safe_query}&limit=1&entity=song"
@@ -154,19 +149,71 @@ def play_global_search(query: str) -> str:
         track_name = track["trackName"]
         artist     = track["artistName"]
         track_url  = track["trackViewUrl"]
+        track_id   = track.get("trackId")
 
-        # Open the Apple Music URL — macOS routes this to the Music app
-        subprocess.run(["open", track_url], check=True, timeout=10)
-        # Trigger play in case Music.app opens but doesn't auto-play
+        # Strategy 1: AppleScript direct play by track ID (fastest, most reliable)
+        # Works if the track is in the user's iCloud Music Library
+        if track_id:
+            script = f'tell application "Music" to play track id {track_id}'
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=8
+            )
+            if result.returncode == 0:
+                return f"Playing '{track_name}' by {artist}."
+
+        # Strategy 2: itmss:// URL scheme — opens directly in Music.app, not browser
+        # This is the key fix: itmss:// vs https:// routes to Music app
+        itmss_url = track_url.replace("https://", "itmss://")
+        subprocess.run(["open", itmss_url], timeout=10)
+
+        # Give Music.app time to load the track page
+        time.sleep(2.5)
+
+        # Explicitly trigger playback — Music.app sometimes lands on the track
+        # page without auto-playing
         subprocess.run(
             ["osascript", "-e", 'tell application "Music" to play'],
             check=False, timeout=5
         )
 
-        return f"Playing '{track_name}' by {artist} from Apple Music catalog."
+        # Brief pause then verify it's actually playing
+        time.sleep(1)
+        check = subprocess.run(
+            ["osascript", "-e",
+             'tell application "Music" to get player state'],
+            capture_output=True, text=True, timeout=5
+        )
+        state = check.stdout.strip().lower()
+
+        if "playing" in state:
+            return f"Playing '{track_name}' by {artist}."
+        else:
+            # Strategy 3: Fallback — search Music.app library directly
+            # (covers iCloud matched tracks that may not respond to itmss://)
+            search_script = (
+                f'tell application "Music"\n'
+                f'  set results to search playlist "Music" for "{track_name} {artist}"\n'
+                f'  if results is not {{}} then\n'
+                f'    play item 1 of results\n'
+                f'    return "playing"\n'
+                f'  end if\n'
+                f'end tell'
+            )
+            fallback = subprocess.run(
+                ["osascript", "-e", search_script],
+                capture_output=True, text=True, timeout=10
+            )
+            if "playing" in fallback.stdout.lower():
+                return f"Playing '{track_name}' by {artist} from library."
+
+            return (
+                f"Opened '{track_name}' by {artist} in Music. "
+                f"Playback should start automatically."
+            )
 
     except urllib.error.URLError:
-        return "Could not reach iTunes catalog — check internet connection."
+        return "Could not reach iTunes catalog. Check internet connection."
     except Exception as e:
         return f"Error searching global catalog: {e}"
 

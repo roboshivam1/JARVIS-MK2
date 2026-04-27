@@ -173,14 +173,27 @@ class Dispatcher:
         Determines which agent should handle this task.
 
         Priority:
-        1. task.assigned_agent (already set by Planner — trusted if valid)
+        0. Explicit agent naming in the task description
+           ("tell PROTEUS to...", "ask the browser agent to...",
+            "have HERMES search for...", "tell web_agent to...")
+           This is the most common case when the user explicitly addresses
+           an agent by name or Greek name.
+        1. task.assigned_agent (set by Planner — trusted if valid)
         2. Keyword matching against AGENT_REGISTRY best_for lists
         3. LLM-assisted routing (for genuinely ambiguous tasks)
         4. Fallback to "web_agent"
         """
+        # ── Tier 0: Explicit agent name in task description ───────────────────
+        # When the user says "tell Proteus to X" or "ask the browser agent to X"
+        # we detect that and route directly — no scoring needed.
+        # Also strips the routing instruction from the description so the
+        # receiving agent only sees the actual task (not "tell X agent to do Y").
+        explicit = self._detect_explicit_agent(task)
+        if explicit:
+            return explicit
+
         # ── Tier 1: Already assigned and valid ────────────────────────────────
         if task.assigned_agent:
-            # Resolve Greek name alias if needed
             resolved = AGENT_ALIASES.get(
                 task.assigned_agent.lower(), task.assigned_agent
             )
@@ -201,6 +214,84 @@ class Dispatcher:
         print(f"[dispatcher] Could not confidently route task {task.id}. Defaulting to web_agent.")
         return "web_agent"
 
+    def _detect_explicit_agent(self, task: Task) -> str | None:
+        """
+        Tier 0 routing: detects when the user explicitly names an agent in
+        the task description and routes directly to that agent.
+
+        Handles all of these patterns:
+          "tell Proteus to go to LinkedIn..."
+          "ask the browser agent to download..."
+          "have HERMES search for..."
+          "tell web_agent to look up..."
+          "ask APOLLO to play something"
+          "get MNEMOSYNE to remember this"
+
+        When an explicit agent name is found:
+        1. Routes to that agent
+        2. Strips the delegation preamble ("tell X to", "ask X to", etc.)
+           from task.description so the agent receives a clean task,
+           not "tell Proteus to go to LinkedIn" but "go to LinkedIn"
+
+        Returns the resolved agent name, or None if no explicit name found.
+        """
+        import re
+
+        desc       = task.description
+        desc_lower = desc.lower()
+
+        # Build a lookup of all recognisable agent names:
+        # functional names ("browser_agent", "web agent") and
+        # Greek aliases ("proteus", "hermes") and their display variants
+        name_to_agent = {}
+
+        # Functional names — both underscore and space versions
+        for agent_name in self.agents:
+            name_to_agent[agent_name.lower()]              = agent_name  # "browser_agent"
+            name_to_agent[agent_name.lower().replace("_", " ")] = agent_name  # "browser agent"
+
+        # Greek aliases from config
+        for greek, functional in AGENT_ALIASES.items():
+            if functional in self.agents:
+                name_to_agent[greek.lower()] = functional  # "proteus" → "browser_agent"
+
+        # Delegation trigger phrases — patterns like "tell X to", "ask X to"
+        # We look for these followed by any known agent name
+        DELEGATION_PATTERNS = [
+            r"tell\s+(?:the\s+)?({name})\s+(?:agent\s+)?(?:\w+\s+)?to\s+",
+            r"ask\s+(?:the\s+)?({name})\s+(?:agent\s+)?(?:\w+\s+)?to\s+",
+            r"have\s+(?:the\s+)?({name})\s+(?:agent\s+)?(?:\w+\s+)?(?:to\s+)?",
+            r"get\s+(?:the\s+)?({name})\s+(?:agent\s+)?(?:to\s+)?",
+            r"use\s+(?:the\s+)?({name})\s+(?:agent\s+)?(?:to\s+)?",
+            r"(?:the\s+)?({name})\s+(?:agent\s+)?(?:should|needs\s+to|can you)\s+",
+        ]
+
+        for name, agent_name in name_to_agent.items():
+            # Escape the name for use in regex (handles underscores, spaces)
+            escaped = re.escape(name)
+
+            for pattern_template in DELEGATION_PATTERNS:
+                pattern = pattern_template.format(name=escaped)
+                m = re.search(pattern, desc_lower)
+                if m:
+                    # Found a match — extract the actual task after the preamble
+                    end_pos  = m.end()
+                    raw_task = desc[end_pos:].strip()
+
+                    if raw_task:
+                        # Update the task description to be just the actual task
+                        task.description = raw_task[0].upper() + raw_task[1:]
+                        print(
+                            f"[dispatcher] Explicit agent '{name}' detected → {agent_name}. "
+                            f"Task rewritten to: {task.description[:60]}"
+                        )
+                    else:
+                        print(f"[dispatcher] Explicit agent '{name}' detected → {agent_name}.")
+
+                    return agent_name
+
+        return None
+
     def _keyword_match(self, description: str) -> str | None:
         """
         Matches the task description against AGENT_REGISTRY's best_for lists.
@@ -208,13 +299,29 @@ class Dispatcher:
         Scores each agent by how many of its best_for keywords appear in
         the task description. Returns the highest-scoring agent name,
         or None if no agent scores above 0.
+
+        MUSIC PRIORITY RULE:
+        If the description contains a music action word ("play", "pause",
+        "skip") alongside any other word like "search", "globally", "find",
+        music_agent always wins. The user saying "search globally and play X"
+        is a music request, not a web search request.
         """
         desc_lower = description.lower()
-        scores     = {}
 
+        # Hard priority: if any music action word is present, route to music_agent
+        # before doing general scoring. "play", "pause", "skip", "next track"
+        # are unambiguous music intents regardless of other words in the sentence.
+        MUSIC_ACTION_WORDS = ["play ", "pause the", "skip track", "next track",
+                              "previous track", "stop the music", "resume music"]
+        if any(w in desc_lower for w in MUSIC_ACTION_WORDS):
+            if "music_agent" in self.agents:
+                print(f"[dispatcher] Music action detected — routing to music_agent.")
+                return "music_agent"
+
+        scores = {}
         for agent_name, info in AGENT_REGISTRY.items():
             if agent_name not in self.agents:
-                continue  # Don't route to agents we don't have loaded
+                continue
 
             score = sum(
                 1 for keyword in info.get("best_for", [])
@@ -226,7 +333,6 @@ class Dispatcher:
         if not scores:
             return None
 
-        # Return the agent with the most keyword matches
         best = max(scores, key=lambda k: scores[k])
         print(f"[dispatcher] Keyword match: '{best}' (score {scores[best]}) for task.")
         return best

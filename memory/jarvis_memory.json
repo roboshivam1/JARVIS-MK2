@@ -1,8 +1,8 @@
 {
   "metadata": {
     "created": "2026-04-18T10:36:01.108165",
-    "last_updated": "2026-04-18T18:39:55.234820",
-    "total_facts": 5
+    "last_updated": "2026-04-25T22:08:17.912432",
+    "total_facts": 33
   },
   "memories": [
     {
@@ -11,7 +11,7 @@
       "added": "2026-04-18T10:36:01.108174",
       "source": "conversation",
       "importance": 0.9,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "JARVIS uses specialist agents for different tasks: web_agent for internet search, memory_agent for recall, system_agent for macOS control, music_agent for playback, research_agent for deep research.",
@@ -35,7 +35,7 @@
       "added": "2026-04-18T12:12:04.579309",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user is interested in the latest versions of Python.",
@@ -43,6 +43,230 @@
       "added": "2026-04-18T18:39:55.234801",
       "source": "consolidation",
       "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user asked about the time and was told it's currently 5:02 PM.",
+      "category": "personal",
+      "added": "2026-04-18T23:32:14.948115",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in learning about Python, specifically decorators.",
+      "category": "preferences",
+      "added": "2026-04-18T23:32:14.949271",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user asked the system agent for their battery level.",
+      "category": "personal",
+      "added": "2026-04-18T23:32:24.571640",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user inquired about Jarvis' status and well-being.",
+      "category": "personal",
+      "added": "2026-04-18T23:32:24.573668",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user likes the movie 'The Hangover'.",
+      "category": "preferences",
+      "added": "2026-04-18T23:32:35.779463",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is working with Python.",
+      "category": "technical",
+      "added": "2026-04-18T23:32:35.781939",
+      "source": "consolidation",
+      "importance": 1.0,
+      "access_count": 1
+    },
+    {
+      "fact": "The user wants to play Bohemian Rhapsody on Apple Music.",
+      "category": "preferences",
+      "added": "2026-04-18T23:32:35.784458",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's name is Shivam.",
+      "category": "personal",
+      "added": "2026-04-18T23:32:42.247311",
+      "source": "consolidation",
+      "importance": 1.0,
+      "access_count": 1
+    },
+    {
+      "fact": "The user is building an AI system called Jarvis.",
+      "category": "projects",
+      "added": "2026-04-18T23:32:42.250276",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 1
+    },
+    {
+      "fact": "User is asking about their battery percentage multiple times.",
+      "category": "technical",
+      "added": "2026-04-18T23:35:18.877451",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is looking up the current price of gold in India.",
+      "category": "preferences",
+      "added": "2026-04-18T23:58:54.785362",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to know who won the last IPL season.",
+      "category": "preferences",
+      "added": "2026-04-18T23:58:54.790222",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is a big fan of the Iron Man franchise.",
+      "category": "personal",
+      "added": "2026-04-19T00:05:10.945130",
+      "source": "agent_store",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a web agent called HERMES and also JARVIS (note: both web agents mentioned).",
+      "category": "personal",
+      "added": "2026-04-19T10:52:51.034129",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user likes the song 'Bohemian Rhapsody'.",
+      "category": "preferences",
+      "added": "2026-04-19T10:53:13.424570",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is also a fan of Shahrukh Khan.",
+      "category": "preferences",
+      "added": "2026-04-19T10:53:13.429850",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has asked to compare FastAPI and Flask for a small project.",
+      "category": "projects",
+      "added": "2026-04-19T10:53:13.435036",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user enjoys listening to ACDC.",
+      "category": "preferences",
+      "added": "2026-04-19T11:05:41.053563",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user prefers playing Bohemian Rhapsody over other songs by the same artist.",
+      "category": "preferences",
+      "added": "2026-04-19T11:05:41.059838",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in playing music by ACDC and Queen.",
+      "category": "preferences",
+      "added": "2026-04-20T15:23:36.622168",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's ability to play specific songs was not mentioned.",
+      "category": "technical",
+      "added": "2026-04-20T15:23:36.628161",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a LinkedIn account.",
+      "category": "personal",
+      "added": "2026-04-20T15:35:44.503602",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has pending connection requests on their LinkedIn network.",
+      "category": "personal",
+      "added": "2026-04-20T15:35:44.510183",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user uses LinkedIn.",
+      "category": "personal",
+      "added": "2026-04-20T15:39:37.619940",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is connected on LinkedIn and has pending connection requests.",
+      "category": "personal",
+      "added": "2026-04-20T15:39:37.626886",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is looking for a hair styling tutorial video.",
+      "category": "preferences",
+      "added": "2026-04-25T15:46:40.039330",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's preferred search engine or platform is YouTube, but they are also open to alternative tutorials and platforms.",
+      "category": "preferences",
+      "added": "2026-04-25T15:46:40.049669",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The system has agents for internet research (HERMES), long-term memory (MNEMOSYNE), macOS control (HEPHAESTUS), music playback (APOLLO), and deep multi-source research (ATHENA).",
+      "category": "technical",
+      "added": "2026-04-25T22:08:17.912401",
+      "source": "consolidation",
+      "importance": 0.7,
       "access_count": 0
     }
   ]

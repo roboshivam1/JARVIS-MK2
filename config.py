@@ -21,7 +21,7 @@ load_dotenv()
 #           "ollama"     ← fully local (for testing without any API)
 # -----------------------------------------------------------------------------
 
-ACTIVE_PROVIDER = "google"
+ACTIVE_PROVIDER    = "anthropic"
 
 
 # -----------------------------------------------------------------------------
@@ -70,18 +70,9 @@ if not GROQ_API_KEY:
 # When you switch ACTIVE_PROVIDER, also update ORCHESTRATOR_MODEL to the
 # equivalent model on the new provider.
 #
-# Current:  Google Gemini
-# Future:   Uncomment the Anthropic line and comment the Google one
 # -----------------------------------------------------------------------------
 
-# ── Current (Google) ──────────────────────────────────────────────────────────
-ORCHESTRATOR_MODEL = "gemini-2.5-flash"
-
-# ── Future (Anthropic) — swap these when you have the API key ─────────────────
-# ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
-
-# ── Future (OpenAI) ───────────────────────────────────────────────────────────
-# ORCHESTRATOR_MODEL = "gpt-4o"
+ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
 
 # ── Local Ollama — agents always run locally regardless of cloud provider ──────
 AGENT_MODEL         = "llama3.1:8b"
@@ -127,6 +118,7 @@ AGENT_ALIASES = {
     "hephaestus": "system_agent",
     "apollo":     "music_agent",
     "athena":     "research_agent",
+    "proteus":    "browser_agent",
 }
 
 AGENT_REGISTRY = {
@@ -149,6 +141,24 @@ AGENT_REGISTRY = {
     "research_agent": {
         "description": "Performs deep multi-step research across multiple sources and synthesises findings.",
         "best_for":    ["research", "comparisons", "detailed analysis", "summarising topics"],
+    },
+    "browser_agent": {
+        "description": (
+            "Controls a real browser to complete tasks on any website — accepts connections, "
+            "fills forms, downloads files, logs into accounts, navigates portals and web apps. "
+            "Use for anything requiring actual browser interaction that cannot be done via API."
+        ),
+        "best_for": [
+            "browser agent", "proteus",
+            "accept", "connection requests", "linkedin",
+            "portal", "college portal", "university portal",
+            "google classroom", "classroom",
+            "download from", "upload to",
+            "fill form", "fill out", "submit form",
+            "log into", "sign into", "login to",
+            "booking", "checkout",
+            "web app", "web application",
+        ],
     },
 }
 

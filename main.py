@@ -100,12 +100,18 @@ def boot() -> tuple:
 
     # ── Orchestrator ──────────────────────────────────────────────────────────
     print("[boot] Starting orchestrator...")
+    # on_status is wired after TTS boots — see below
     orchestrator = Orchestrator(agents=agents, vault=vault)
 
     # ── Speech I/O ────────────────────────────────────────────────────────────
     print("[boot] Initialising speech systems...")
     ears  = SpeechToText()
     mouth = TextToSpeech()
+
+    # Wire up progress narration now that mouth exists
+    # on_status calls mouth.speak() — JARVIS narrates what he is doing
+    # while agents are working rather than going silent
+    orchestrator.on_status = lambda msg: mouth.speak(msg)
 
     print("[boot] All systems online.")
     return orchestrator, ears, mouth
@@ -205,6 +211,8 @@ def run_voice_loop(
 
                 except Exception as e:
                     print(f"\n[ERROR] {e}")
+                    # Log the error with context
+                    orchestrator.logger.log_error(str(e), context="voice_loop")
                     sentence_queue.put(
                         "I ran into an issue there. Could you repeat that, sir?"
                     )
@@ -249,7 +257,7 @@ if __name__ == "__main__":
     try:
         orchestrator, ears, mouth = boot()
         print_banner()
-        mouth.speak("All systems online. Good to see you, sir.")
+        mouth.speak("I'm on. Good to see you, sir.")
         mouth.wait_until_done()
         run_voice_loop(orchestrator, ears, mouth)
 

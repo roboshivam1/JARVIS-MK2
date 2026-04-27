@@ -258,9 +258,24 @@ class BaseAgent(ABC):
             answer = (response.text or "").strip()
 
             if not answer:
-                # Model returned neither tools nor text — unusual but handle it
                 print(f"  [{self.name}] Warning: empty response on iteration {iteration}")
                 continue
+
+            # ── Llama tool-call leak detection ────────────────────────────────────────────
+            # llama3.1:8b sometimes outputs its tool-call intent as plain text
+            # instead of structured tool_calls, using its special token syntax:
+            #   <|python_tag|>play_global_search(query="Thunderstruck")
+            # When we detect this, we parse and execute the tool ourselves
+            # rather than treating it as the final answer.
+            leaked = self._extract_leaked_tool_call(answer, tool_map)
+            if leaked:
+                tool_name, arguments = leaked
+                print(f"  [{self.name}] Leaked tool call detected: {tool_name}({arguments})")
+                result = self._execute_tool(tool_name, arguments)
+                print(f"  [{self.name}] Tool: {tool_name}({arguments}) → {str(result)[:100]}")
+                messages.append({"role": "assistant", "content": answer})
+                messages.append({"role": "tool",      "content": str(result)})
+                continue  # Loop back so model can produce a clean text summary
 
             print(f"  [{self.name}] Done.")
             return self._build_result(
@@ -344,6 +359,98 @@ class BaseAgent(ABC):
     # We use the first sentence of the response as a heuristic.
     # Subclasses can override this for more sophisticated summarisation.
     # -------------------------------------------------------------------------
+
+    def _extract_leaked_tool_call(
+        self, text: str, tool_map: dict
+    ):
+        """
+        Detects and parses Llama's tool-call syntax when it leaks into text.
+
+        llama3.1:8b sometimes outputs tool calls as plain text instead of
+        structured tool_calls. It uses its own token format:
+          <|python_tag|>play_global_search(query="Thunderstruck")
+          <|python_tag|>tool.call("search_web", {"query": "news"})
+
+        We detect the <|python_tag|> sentinel, extract the function name
+        and arguments, and return them so the run loop can execute the tool
+        properly instead of treating this text as the final answer.
+
+        Returns:
+            (tool_name, arguments_dict) if a valid leaked call is found.
+            None if no leak is detected or parsing fails.
+        """
+        import re, json
+
+        if "<|python_tag|>" not in text:
+            return None
+
+        # Strip the token and everything before it
+        after_tag = text.split("<|python_tag|>", 1)[1].strip()
+
+        # Pattern 1: tool.call("func_name", {...})
+        # e.g. tool.call("play_global_search", {"query": "Thunderstruck"})
+        m = re.match(r'tool\.call\(["\'](\w+)["\'\],\s*(\{.*?\})\)', after_tag, re.DOTALL)
+        if m:
+            name = m.group(1)
+            try:
+                args = json.loads(m.group(2))
+                if name in tool_map:
+                    return name, args
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Pattern 2: tool_call('func_name', args_string)
+        # e.g. tool_call('play_global_search', "query=Thunderstruck")
+        m = re.match(r'tool_call\(["\'](\w+)["\'\],\s*(.+?)\)$', after_tag, re.DOTALL)
+        if m:
+            name = m.group(1)
+            if name in tool_map:
+                # Try to parse the args as JSON first, then as keyword string
+                raw_args = m.group(2).strip().strip("\"'")
+                try:
+                    args = json.loads(raw_args)
+                    return name, args
+                except (json.JSONDecodeError, ValueError):
+                    # Keyword string like "query=Thunderstruck" — use first tool param
+                    tools = self.get_tools()
+                    for t in tools:
+                        fn = t.get("function", {})
+                        if fn.get("name") == name:
+                            props = fn.get("parameters", {}).get("properties", {})
+                            if props:
+                                first_param = list(props.keys())[0]
+                                return name, {first_param: raw_args}
+
+        # Pattern 3: func_name(key="value", ...)  — direct call syntax
+        # e.g. play_global_search(query="Bohemian Rhapsody")
+        m = re.match(r'(\w+)\((.*)\)$', after_tag, re.DOTALL)
+        if m:
+            name = m.group(1)
+            if name in tool_map:
+                raw_args = m.group(2).strip()
+                # Parse keyword arguments
+                args = {}
+                # Try key="value" or key='value' pairs
+                for kv in re.finditer(r'(\w+)\s*=\s*["\'](.*?)["\']', raw_args):
+                    args[kv.group(1)] = kv.group(2)
+                if not args:
+                    # No quoted values — try key=value (unquoted)
+                    for kv in re.finditer(r'(\w+)\s*=\s*([^,]+)', raw_args):
+                        args[kv.group(1)] = kv.group(2).strip()
+                if args:
+                    return name, args
+                # Single positional arg — use first parameter
+                if raw_args:
+                    tools = self.get_tools()
+                    for t in tools:
+                        fn = t.get("function", {})
+                        if fn.get("name") == name:
+                            props = fn.get("parameters", {}).get("properties", {})
+                            if props:
+                                first_param = list(props.keys())[0]
+                                return name, {first_param: raw_args.strip('"\' ')}
+
+        return None  # No valid leaked tool call found
 
     def _make_summary(self, full_answer: str) -> str:
         """

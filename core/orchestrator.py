@@ -17,12 +17,16 @@
 
 from __future__ import annotations
 
+import time
+from typing import Callable, Optional
+
 from core.task import TaskPlan, TaskStatus
 from core.planner import Planner
 from core.dispatcher import Dispatcher
 from memory.short_term import ShortTermMemory
 from memory.long_term import MemoryVault
 from memory.consolidator import append_to_transcript
+from logs.logger import JarvisLogger
 from config import (
     AGENT_REGISTRY,
     AGENT_ALIASES,
@@ -49,6 +53,8 @@ JARVIS_SYSTEM_PROMPT = (
     "- Sharp, concise, direct. No filler. No hollow openers like 'Certainly!'.\n"
     "- Dry wit when appropriate — never forced.\n"
     "- Lead with the answer. Stop when you have said what needs saying.\n"
+    "- Refer to the user as 'sir'. Always talk to the user maintaining his superiority.\n"
+    "- Do not include asterisks in your output, as it will be spoken out loud.\n"
 )
 
 
@@ -100,11 +106,28 @@ class Orchestrator:
         response     = orchestrator.process("How are you?")
     """
 
-    def __init__(self, agents: dict, vault: MemoryVault):
+    def __init__(
+        self,
+        agents:    dict,
+        vault:     MemoryVault,
+        on_status: Optional[Callable[[str], None]] = None,
+    ):
+        """
+        Args:
+            agents:    Dict of agent_name → agent instance.
+            vault:     Shared MemoryVault instance.
+            on_status: Optional callback for progress narration.
+                       Called with a short status string before and during
+                       agent execution. In main.py this is wired to
+                       mouth.speak() so JARVIS narrates what he is doing.
+                       Signature: on_status(message: str) -> None
+        """
         self.agents     = agents
         self.vault      = vault
         self.planner    = Planner()
         self.dispatcher = Dispatcher(agents)
+        self.on_status  = on_status   # Progress narration callback
+        self.logger     = JarvisLogger()
 
         core_profile = vault.get_core_profile()
         system       = JARVIS_SYSTEM_PROMPT
@@ -120,12 +143,31 @@ class Orchestrator:
     # Main Entry Point
     # -------------------------------------------------------------------------
 
+    def _narrate(self, message: str) -> None:
+        """
+        Sends a status message to the on_status callback (mouth.speak).
+        Silent no-op if no callback was provided.
+        Only called for non-direct queries — direct responses need no narration.
+        """
+        if self.on_status:
+            try:
+                self.on_status(message)
+            except Exception as e:
+                print(f"[orchestrator] Narration callback error: {e}")
+
     def process(self, user_input: str) -> str:
         """
         Takes user input, classifies it, routes to the right handler,
         returns a spoken response string.
+
+        Also handles:
+        - Timing: records how long the full turn takes
+        - Logging: writes every turn to conversation.log and sessions.jsonl
+        - Narration: calls on_status before agent tasks so JARVIS speaks
+                     a brief status line rather than going silent
         """
         print(f"\n[orchestrator] Input: {user_input}")
+        start_ms = int(time.time() * 1000)
 
         classification = self._classify(user_input)
         print(f"[orchestrator] Classification: {classification}")
@@ -137,8 +179,26 @@ class Orchestrator:
         else:
             response = self._handle_plan(user_input)
 
+        duration_ms = int(time.time() * 1000) - start_ms
+
         append_to_transcript(self.memory.get_transcript_lines())
-        print(f"[orchestrator] Response: {response[:100]}{'...' if len(response) > 100 else ''}")
+
+        # Log the completed turn
+        agents_used = getattr(self, "_last_agents_used", [])
+        plan_steps  = getattr(self, "_last_plan_steps", 0)
+        self.logger.log_turn(
+            user_input=user_input,
+            response=response,
+            classification=classification,
+            agents_used=agents_used,
+            duration_ms=duration_ms,
+            plan_steps=plan_steps,
+        )
+        # Reset per-turn tracking
+        self._last_agents_used = []
+        self._last_plan_steps  = 0
+
+        print(f"[orchestrator] Response ({duration_ms}ms): {response[:100]}{'...' if len(response) > 100 else ''}")
         return response
 
     # -------------------------------------------------------------------------
@@ -226,10 +286,21 @@ class Orchestrator:
         """Routes a single-agent task directly without full planning."""
         from core.task import Task, TaskPlan
 
-        task           = Task(id=1, description=user_input, depends_on=[])
-        plan           = TaskPlan(goal=user_input, tasks=[task])
+        task = Task(id=1, description=user_input, depends_on=[])
+        plan = TaskPlan(goal=user_input, tasks=[task])
+
+        # Narrate before delegating so JARVIS doesn't go silent
+        # We do a quick pre-routing check to name the agent in the narration
+        self.dispatcher._detect_explicit_agent(task)  # populates task.assigned_agent hint
+        agent_name    = self.dispatcher._resolve_agent(task)
+        display_name  = self._agent_display_name(agent_name)
+        self._narrate(f"Let me have {display_name} handle that.")
+
         completed_plan = self.dispatcher.execute(plan)
         result_task    = completed_plan.tasks[0]
+
+        # Track which agents were used for logging
+        self._last_agents_used = [result_task.assigned_agent] if result_task.assigned_agent else []
 
         if result_task.is_done:
             response = self._synthesise_response(
@@ -253,10 +324,24 @@ class Orchestrator:
 
     def _handle_plan(self, user_input: str) -> str:
         """Full Plan → Execute → Critique → (Replan) → Respond workflow."""
+        self._narrate("Let me think through this and put together a plan.")
+
         plan         = self.planner.plan(user_input)
         replan_count = 0
 
+        # Narrate the plan overview if it has multiple steps
+        if len(plan.tasks) > 1:
+            step_count = len(plan.tasks)
+            self._narrate(f"I have broken this into {step_count} steps. Working through them now.")
+
         while True:
+            # Narrate each task before it runs
+            for task in plan.tasks:
+                if task.is_pending:
+                    agent_name   = task.assigned_agent or "the right agent"
+                    display_name = self._agent_display_name(agent_name)
+                    self._narrate(f"{display_name} is working on step {task.id}.")
+
             plan     = self.dispatcher.execute(plan)
             critique = self._critique(user_input, plan)
             print(f"[orchestrator] Critique: achieved={critique['goal_achieved']}")
@@ -270,6 +355,7 @@ class Orchestrator:
 
             replan_count += 1
             print(f"[orchestrator] Replanning ({replan_count}/{MAX_REPLAN_ATTEMPTS})...")
+            self._narrate("Some steps didn't go as planned. Let me adjust my approach.")
 
             new_plan          = self.planner.replan(
                 original_goal=user_input,
@@ -279,6 +365,12 @@ class Orchestrator:
             )
             plan.tasks        = plan.completed_tasks() + new_plan.tasks
             plan.replan_count = replan_count
+
+        # Track agents used and plan size for logging
+        self._last_agents_used = list(set(
+            t.assigned_agent for t in plan.tasks if t.assigned_agent
+        ))
+        self._last_plan_steps = len(plan.tasks)
 
         response = self._synthesise_response(goal=user_input, plan=plan, mode="plan")
         self.memory.add("user", user_input)
@@ -390,6 +482,28 @@ class Orchestrator:
             return "The task ran but I could not produce a clean response."
 
     # -------------------------------------------------------------------------
+    # Agent Display Name
+    # -------------------------------------------------------------------------
+
+    def _agent_display_name(self, agent_name: str) -> str:
+        """
+        Converts a functional agent name to the Greek display name
+        that JARVIS uses in speech.
+
+        web_agent → HERMES, memory_agent → MNEMOSYNE, etc.
+        Falls back to a cleaned version of the functional name if not found.
+        """
+        # Build reverse map: functional_name → Greek name
+        reverse = {v: k.upper() for k, v in AGENT_ALIASES.items()}
+        if agent_name in reverse:
+            return reverse[agent_name]
+
+        # Fallback: clean up the functional name for speech
+        # "browser_agent" → "the browser agent"
+        cleaned = agent_name.replace("_agent", "").replace("_", " ")
+        return f"the {cleaned} agent"
+
+    # -------------------------------------------------------------------------
     # Session Management
     # -------------------------------------------------------------------------
 
@@ -398,3 +512,5 @@ class Orchestrator:
 
     def reset_conversation(self) -> None:
         self.memory.clear()
+        self._last_agents_used = []
+        self._last_plan_steps  = 0
