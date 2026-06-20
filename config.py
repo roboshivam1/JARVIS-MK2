@@ -21,7 +21,7 @@ load_dotenv()
 #           "ollama"     ← fully local (for testing without any API)
 # -----------------------------------------------------------------------------
 
-ACTIVE_PROVIDER    = "anthropic"
+ACTIVE_PROVIDER = "anthropic"
 
 
 # -----------------------------------------------------------------------------
@@ -70,14 +70,30 @@ if not GROQ_API_KEY:
 # When you switch ACTIVE_PROVIDER, also update ORCHESTRATOR_MODEL to the
 # equivalent model on the new provider.
 #
+# Current:  Google Gemini
+# Future:   Uncomment the Anthropic line and comment the Google one
 # -----------------------------------------------------------------------------
 
+# ── Current (Google) ──────────────────────────────────────────────────────────
 ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
+
+# ── Future (Anthropic) — swap these when you have the API key ─────────────────
+# ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
+
+# ── Future (OpenAI) ───────────────────────────────────────────────────────────
+# ORCHESTRATOR_MODEL = "gpt-4o"
 
 # ── Local Ollama — agents always run locally regardless of cloud provider ──────
 AGENT_MODEL         = "llama3.1:8b"
 CONSOLIDATION_MODEL = "llama3.1:8b"
 VISION_MODEL        = "llava"
+
+# ── CALLIOPE (scribe_agent) uses cloud model for writing quality ──────────────
+# Writing quality is the entire value of the scribe — local models produce
+# flat, generic prose. Claude Sonnet produces documents worth reading.
+# Falls back to Gemini if Anthropic is not yet configured.
+CALLIOPE_MODEL    = "claude-sonnet-4-6"
+CALLIOPE_PROVIDER = "anthropic"
 
 
 # -----------------------------------------------------------------------------
@@ -87,7 +103,7 @@ VISION_MODEL        = "llava"
 STT_MODEL       = "whisper-large-v3-turbo"
 STT_SAMPLE_RATE = 16000
 TTS_MODEL       = "kokoro"
-TTS_VOICE       = "am_michael"
+TTS_VOICE       = "af_sarah"
 TTS_FALLBACK    = "say"             # macOS built-in, zero-dependency fallback
 
 
@@ -99,6 +115,14 @@ LONG_TERM_MEMORY_FILE   = "memory/jarvis_memory.json"
 PENDING_TRANSCRIPT_FILE = "memory/pending_transcript.txt"
 FULL_HISTORY_LOG_FILE   = "logs/full_history.txt"
 MAX_CONVERSATION_TURNS  = 10
+
+# How many conversation turns between working memory refreshes.
+# Working memory (vault.get_core_profile()) is injected directly into
+# JARVIS's own system prompt at boot. This interval controls how often
+# it's rebuilt mid-session so newly stored facts become part of JARVIS's
+# own context without requiring a restart. Refresh is cheap (no LLM call,
+# just a vault read) so a moderate interval like this has negligible cost.
+WORKING_MEMORY_REFRESH_INTERVAL = 6
 CONSOLIDATION_CHUNK_SIZE = 30
 
 
@@ -119,6 +143,7 @@ AGENT_ALIASES = {
     "apollo":     "music_agent",
     "athena":     "research_agent",
     "proteus":    "browser_agent",
+    "calliope":   "scribe_agent",
 }
 
 AGENT_REGISTRY = {
@@ -160,6 +185,26 @@ AGENT_REGISTRY = {
             "web app", "web application",
         ],
     },
+    "scribe_agent": {
+        "description": (
+            "Writes, saves, and manages markdown documents. Creates project briefs, "
+            "captures brainstorm sessions, writes notes and decision logs. "
+            "Always documents from conversation context — reads what was discussed and "
+            "structures it into a well-written markdown file."
+        ),
+        "best_for": [
+            # Write triggers
+            "write up", "write down", "document", "save this",
+            "capture", "note this", "make a note",
+            "create a brief", "project brief", "write a plan",
+            "calliope", "scribe",
+            # Document types
+            "notes", "brief", "plan", "summary", "decision log",
+            "brainstorm", "write these thoughts",
+            # Append triggers
+            "add to", "append to", "update the document",
+        ],
+    },
 }
 
 
@@ -167,7 +212,19 @@ AGENT_REGISTRY = {
 # DIRECTORY SETUP
 # -----------------------------------------------------------------------------
 
-REQUIRED_DIRECTORIES = ["memory", "logs"]
+# Workspace — where CALLIOPE (scribe_agent) writes all documents
+WORKSPACE_DIR = "workspace"
+
+REQUIRED_DIRECTORIES = [
+    "memory",
+    "logs",
+    "workspace",
+    "workspace/projects",
+    "workspace/decisions",
+    "workspace/brainstorms",
+    "workspace/notes",
+    "workspace/research",
+]
 
 def ensure_directories():
     """Creates required directories if they don't exist. Call once at boot."""

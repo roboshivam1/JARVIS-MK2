@@ -293,9 +293,7 @@ def _parse_google_response(response) -> LLMResponse:
     """
     try:
         candidate = response.candidates[0]
-        # content or content.parts can be None when Gemini hits SAFETY/MAX_TOKENS
-        content   = candidate.content if candidate else None
-        parts     = (content.parts if content else None) or []
+        parts      = candidate.content.parts
 
         # Check for function call in any part
         for part in parts:
@@ -315,7 +313,7 @@ def _parse_google_response(response) -> LLMResponse:
         )
         return LLMResponse(text=text.strip(), raw=response)
 
-    except (IndexError, AttributeError, TypeError) as e:
+    except (IndexError, AttributeError) as e:
         # Malformed response — return empty text rather than crashing
         return LLMResponse(text="", raw=response)
 
@@ -537,28 +535,126 @@ def _google_tool_call(
 # =============================================================================
 # Anthropic Claude Adapters
 # =============================================================================
+#
+# WHY THIS NEEDS SPECIAL MESSAGE CONVERSION:
+# Our internal generic message format (used by base_agent.py) is OpenAI/
+# Ollama-style:
+#   {"role": "assistant", "content": "...", "tool_calls": [...]}
+#   {"role": "tool", "content": "...", "tool_call_id": "..."}
+#
+# Anthropic's API does NOT accept role="tool" at all — it only allows
+# "user" and "assistant". Tool calls and results are represented as typed
+# CONTENT BLOCKS, not separate roles:
+#   {"role": "assistant", "content": [
+#       {"type": "text", "text": "..."},
+#       {"type": "tool_use", "id": "toolu_abc", "name": "...", "input": {...}}
+#   ]}
+#   {"role": "user", "content": [
+#       {"type": "tool_result", "tool_use_id": "toolu_abc", "content": "..."}
+#   ]}
+#
+# Critically, the tool_use id and the tool_result's tool_use_id must match
+# EXACTLY — Claude validates this. _messages_to_anthropic() below does the
+# full conversion: extracts the system prompt, rebuilds assistant messages
+# with proper tool_use blocks (using ids preserved from the original
+# response — see base_agent.py which now stores these on tool_calls), and
+# groups consecutive "tool" role messages into a single user message with
+# multiple tool_result blocks (Anthropic requires this grouping — sending
+# them as separate consecutive user messages causes the API to reject the
+# Y request).
+# =============================================================================
+
+def _messages_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
+    """
+    Converts our generic message format into Anthropic's required
+    content-block format.
+
+    Returns (system_prompt, anthropic_messages).
+    """
+    system = ""
+    result = []
+    i = 0
+    n = len(messages)
+
+    while i < n:
+        msg  = messages[i]
+        role = msg.get("role")
+
+        if role == "system":
+            system = msg.get("content", "")
+            i += 1
+            continue
+
+        if role == "tool":
+            # Group ALL consecutive tool-result messages into ONE user
+            # message with multiple tool_result blocks — Anthropic requires
+            # this grouping rather than separate consecutive user messages.
+            blocks = []
+            while i < n and messages[i].get("role") == "tool":
+                tmsg = messages[i]
+                tool_use_id = tmsg.get("tool_call_id") or f"toolu_synthetic_{i}"
+                blocks.append({
+                    "type":        "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content":     str(tmsg.get("content", "")),
+                })
+                i += 1
+            result.append({"role": "user", "content": blocks})
+            continue
+
+        if role == "assistant":
+            # Rebuild content blocks: text (if any) + tool_use blocks
+            # reconstructed from the tool_calls metadata base_agent.py
+            # preserves on the message (including the original id Claude
+            # issued, so the next request's tool_result can match it).
+            content_blocks = []
+            text_content = msg.get("content") or ""
+            if text_content.strip():
+                content_blocks.append({"type": "text", "text": text_content})
+
+            stored_tool_calls = msg.get("tool_calls") or []
+            for j, tc in enumerate(stored_tool_calls):
+                content_blocks.append({
+                    "type":  "tool_use",
+                    "id":    tc.get("id") or f"toolu_synthetic_{i}_{j}",
+                    "name":  tc.get("name", ""),
+                    "input": tc.get("arguments", {}) or {},
+                })
+
+            if not content_blocks:
+                # Nothing meaningful to send for this turn — skip rather
+                # than send an empty assistant message, which Anthropic rejects.
+                i += 1
+                continue
+
+            result.append({"role": "assistant", "content": content_blocks})
+            i += 1
+            continue
+
+        # Plain user message — pass through as simple string content
+        result.append({"role": "user", "content": msg.get("content", "")})
+        i += 1
+
+    return system, result
+
 
 def _anthropic_chat(
     messages:   list[dict],
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client   = _get_anthropic_client()
-    system   = ""
-    filtered = []
+    client = _get_anthropic_client()
+    system, converted = _messages_to_anthropic(messages)
 
-    for msg in messages:
-        if msg["role"] == "system":
-            system = msg.get("content", "")
-        else:
-            filtered.append({"role": msg["role"], "content": msg.get("content", "")})
-
-    kwargs = dict(model=model, max_tokens=max_tokens, messages=filtered)
+    kwargs = dict(model=model, max_tokens=max_tokens, messages=converted)
     if system:
         kwargs["system"] = system
 
     response = client.messages.create(**kwargs)
-    text     = response.content[0].text if response.content else ""
+    text     = "".join(
+        block.text for block in response.content
+        if getattr(block, "type", None) == "text"
+    )
     return LLMResponse(text=text, raw=response)
 
 
@@ -568,15 +664,8 @@ def _anthropic_tool_call(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client   = _get_anthropic_client()
-    system   = ""
-    filtered = []
-
-    for msg in messages:
-        if msg["role"] == "system":
-            system = msg.get("content", "")
-        else:
-            filtered.append({"role": msg["role"], "content": msg.get("content", "")})
+    client = _get_anthropic_client()
+    system, converted = _messages_to_anthropic(messages)
 
     # Anthropic's tool schema format differs slightly from the OpenAI standard
     anthropic_tools = []
@@ -591,7 +680,7 @@ def _anthropic_tool_call(
     kwargs = dict(
         model=model,
         max_tokens=max_tokens,
-        messages=filtered,
+        messages=converted,
         tools=anthropic_tools,
     )
     if system:
@@ -603,7 +692,14 @@ def _anthropic_tool_call(
 
     for block in response.content:
         if block.type == "tool_use":
-            tool_calls.append({"name": block.name, "arguments": block.input})
+            # Preserve the id — base_agent.py carries this forward onto the
+            # tool-result message so the NEXT request's tool_result block
+            # can match it exactly, which Anthropic validates strictly.
+            tool_calls.append({
+                "name":      block.name,
+                "arguments": block.input,
+                "id":        block.id,
+            })
         elif block.type == "text":
             text += block.text
 
@@ -613,6 +709,54 @@ def _anthropic_tool_call(
 # =============================================================================
 # OpenAI Adapters
 # =============================================================================
+#
+# OpenAI's format is closer to our generic format than Anthropic's, but
+# still has specific requirements: tool_calls on assistant messages must be
+# in OpenAI's exact shape (id, type, function.name, function.arguments as a
+# JSON STRING not a dict), and "tool" role messages must carry tool_call_id.
+# _messages_to_openai() handles this conversion, mirroring the Anthropic
+# helper above so both providers' tool-use round trips work correctly
+# regardless of which agent or model is calling them.
+# =============================================================================
+
+def _messages_to_openai(messages: list[dict]) -> list[dict]:
+    """Converts our generic message format into OpenAI's required shape."""
+    result = []
+
+    for i, msg in enumerate(messages):
+        role = msg.get("role")
+
+        if role == "tool":
+            result.append({
+                "role":         "tool",
+                "tool_call_id": msg.get("tool_call_id") or f"call_synthetic_{i}",
+                "content":      str(msg.get("content", "")),
+            })
+            continue
+
+        if role == "assistant":
+            stored_tool_calls = msg.get("tool_calls") or []
+            entry = {"role": "assistant", "content": msg.get("content") or None}
+            if stored_tool_calls:
+                entry["tool_calls"] = [
+                    {
+                        "id":   tc.get("id") or f"call_synthetic_{i}_{j}",
+                        "type": "function",
+                        "function": {
+                            "name":      tc.get("name", ""),
+                            "arguments": json.dumps(tc.get("arguments", {}) or {}),
+                        },
+                    }
+                    for j, tc in enumerate(stored_tool_calls)
+                ]
+            result.append(entry)
+            continue
+
+        # system / user — pass through unchanged
+        result.append({"role": role, "content": msg.get("content", "")})
+
+    return result
+
 
 def _openai_chat(
     messages:   list[dict],
@@ -620,8 +764,9 @@ def _openai_chat(
     max_tokens: int,
     json_mode:  bool = False,
 ) -> LLMResponse:
-    client = _get_openai_client()
-    kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
+    client     = _get_openai_client()
+    converted  = _messages_to_openai(messages)
+    kwargs     = dict(model=model, max_tokens=max_tokens, messages=converted)
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
@@ -636,9 +781,11 @@ def _openai_tool_call(
     model:      str,
     max_tokens: int,
 ) -> LLMResponse:
-    client     = _get_openai_client()
+    client    = _get_openai_client()
+    converted = _messages_to_openai(messages)
+
     response   = client.chat.completions.create(
-        model=model, max_tokens=max_tokens, messages=messages, tools=tools
+        model=model, max_tokens=max_tokens, messages=converted, tools=tools
     )
     msg        = response.choices[0].message
     tool_calls = []
@@ -648,6 +795,7 @@ def _openai_tool_call(
             tool_calls.append({
                 "name":      tc.function.name,
                 "arguments": json.loads(tc.function.arguments),
+                "id":        tc.id,
             })
 
     return LLMResponse(
@@ -660,6 +808,19 @@ def _openai_tool_call(
 # =============================================================================
 # Ollama (Local) Adapters
 # =============================================================================
+#
+# Ollama's chat format already matches our generic format closely (it
+# accepts role="tool" directly) and doesn't require id matching the way
+# Anthropic/OpenAI do. We still sanitize messages before sending — stripping
+# extra metadata keys (tool_call_id, name) that base_agent.py now attaches
+# for the OTHER providers' benefit — purely as a defensive measure so the
+# Ollama client never receives keys it doesn't expect.
+# =============================================================================
+
+def _sanitize_for_ollama(messages: list[dict]) -> list[dict]:
+    """Strips to only role/content — Ollama doesn't need or expect anything else."""
+    return [{"role": m.get("role", "user"), "content": m.get("content", "") or ""} for m in messages]
+
 
 def _ollama_chat(
     messages:  list[dict],
@@ -669,7 +830,8 @@ def _ollama_chat(
     if not OLLAMA_AVAILABLE:
         raise ImportError("ollama not installed. Run: pip install ollama")
 
-    kwargs = dict(model=model, messages=messages, stream=False)
+    clean  = _sanitize_for_ollama(messages)
+    kwargs = dict(model=model, messages=clean, stream=False)
     if json_mode:
         kwargs["format"] = "json"
 
@@ -686,34 +848,19 @@ def _ollama_tool_call(
     if not OLLAMA_AVAILABLE:
         raise ImportError("ollama not installed. Run: pip install ollama")
 
-    response = ollama.chat(model=model, messages=messages, tools=tools, stream=False)
+    clean     = _sanitize_for_ollama(messages)
+    response  = ollama.chat(model=model, messages=clean, tools=tools, stream=False)
+    message   = response.get("message", {})
+    raw_calls = message.get("tool_calls", [])
 
-    # Support both dict-style (older ollama lib) and object-style (newer lib)
-    if isinstance(response, dict):
-        message = response.get("message", {}) or {}
-    else:
-        msg = getattr(response, "message", None)
-        message = msg if isinstance(msg, dict) else (vars(msg) if msg else {})
-
-    # Use `or []` — NOT `.get("tool_calls", [])` — because Ollama sometimes
-    # returns {"tool_calls": None} when no tool is called. The default arg
-    # in .get() is only used when the key is ABSENT; it won't replace None.
-    raw_calls = message.get("tool_calls") or []
-
-    tool_calls = []
-    for tc in raw_calls:
-        fn = tc.get("function", tc)  # handle both {"function": {...}} and flat dicts
-        args = fn.get("arguments", {})
-        # Ollama may return arguments as a JSON string in older versions
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = {}
-        tool_calls.append({
-            "name":      fn.get("name", ""),
-            "arguments": args,
-        })
+    tool_calls = [
+        {
+            "name":      tc["function"]["name"],
+            "arguments": tc["function"]["arguments"],
+            "id":        None,  # Ollama doesn't issue ids — not needed for its own format
+        }
+        for tc in raw_calls
+    ]
 
     return LLMResponse(
         text=message.get("content") or None,

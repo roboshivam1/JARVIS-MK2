@@ -33,6 +33,7 @@ import threading
 import queue
 import sys
 import re
+import random
 
 from config import ensure_directories
 from memory.long_term import MemoryVault
@@ -42,6 +43,8 @@ from agents.memory_agent import MemoryAgent
 from agents.system_agent import SystemAgent
 from agents.music_agent import MusicAgent
 from agents.research_agent import ResearchAgent
+from agents.browser_agent import BrowserAgent
+from agents.scribe_agent import ScribeAgent
 from core.orchestrator import Orchestrator
 from in_out.stt import SpeechToText
 from in_out.tts import TextToSpeech
@@ -59,6 +62,35 @@ SHUTDOWN_PHRASES = [
     "power down",
     "go to sleep",
 ]
+
+# -----------------------------------------------------------------------------
+# Acknowledgment Filler — Closing the Silence Gap
+#
+# WHY THIS EXISTS:
+# Dead air during processing is ambiguous — the user can't tell if JARVIS
+# is thinking or if something broke. Claude's UX pattern of acknowledging
+# before extended thinking solves this. We replicate it here as a race
+# between a short timeout and the first real sentence arriving.
+#
+# These are zero-cost, zero-latency canned phrases — no LLM call involved.
+# A contextual acknowledgment (referencing what was actually asked) would
+# require its own LLM call, adding latency to the very problem we're
+# solving, so generic filler is the right choice for this layer.
+# -----------------------------------------------------------------------------
+
+FILLER_PHRASES = [
+    "One moment.",
+    "Let me think about that.",
+    "Give me a second.",
+    "Let me see.",
+    "Working on it.",
+]
+
+# How long to wait before speaking a filler phrase. Short enough that
+# silence never drags, long enough that fast responses never get an
+# unnecessary filler tacked on front. 600ms is a reasonable middle ground —
+# tune lower if JARVIS still feels laggy, higher if fillers feel too eager.
+FILLER_TIMEOUT_SECONDS = 0.6
 
 
 # =============================================================================
@@ -95,6 +127,8 @@ def boot() -> tuple:
         "system_agent":   SystemAgent(),
         "music_agent":    MusicAgent(),
         "research_agent": ResearchAgent(),
+        "browser_agent":  BrowserAgent(),
+        "scribe_agent":   ScribeAgent(),
     }
     print(f"[boot] Agents loaded: {', '.join(agents.keys())}")
 
@@ -108,10 +142,25 @@ def boot() -> tuple:
     ears  = SpeechToText()
     mouth = TextToSpeech()
 
-    # Wire up progress narration now that mouth exists
+    # Wire up progress narration now that mouth exists.
     # on_status calls mouth.speak() — JARVIS narrates what he is doing
-    # while agents are working rather than going silent
-    orchestrator.on_status = lambda msg: mouth.speak(msg)
+    # while agents are working rather than going silent.
+    #
+    # narration_fired is a shared Event that the voice loop checks before
+    # speaking a generic filler phrase — if real narration already spoke
+    # something for this turn, the generic filler is skipped to avoid
+    # back-to-back acknowledgments ("One moment." immediately followed by
+    # "Let me have APOLLO handle that.").
+    narration_fired = threading.Event()
+
+    def _on_status(msg: str) -> None:
+        narration_fired.set()
+        mouth.speak(msg)
+
+    orchestrator.on_status = _on_status
+    # Attach to the orchestrator instance so run_voice_loop can check it
+    # without changing boot()'s return signature
+    orchestrator.narration_fired = narration_fired
 
     print("[boot] All systems online.")
     return orchestrator, ears, mouth
@@ -198,6 +247,10 @@ def run_voice_loop(
             # main thread. None is the sentinel value signalling completion.
             sentence_queue: queue.Queue = queue.Queue()
 
+            # Reset narration tracking for this turn — set by orchestrator's
+            # on_status callback if it fires real narration (delegate/plan modes)
+            orchestrator.narration_fired.clear()
+
             def think_and_queue():
                 try:
                     response  = orchestrator.process(user_text)
@@ -226,12 +279,41 @@ def run_voice_loop(
             )
             think_thread.start()
 
-            # Read sentences and speak them as they arrive
+            # Read sentences and speak them as they arrive.
+            #
+            # ACKNOWLEDGMENT FILLER RACE:
+            # For the very first sentence only, we race a short timeout
+            # against the queue. If nothing has arrived within
+            # FILLER_TIMEOUT_SECONDS, we speak a generic filler phrase once
+            # (skipped if real narration already fired via on_status — see
+            # narration_fired check) and then fall back to blocking waits
+            # for everything else. This closes the dead-air gap during
+            # classification + processing without ever duplicating or
+            # delaying the real response.
+            first_sentence_received = False
+            filler_spoken            = False
+
             while True:
-                sentence = sentence_queue.get()
+                if not first_sentence_received and not filler_spoken:
+                    try:
+                        sentence = sentence_queue.get(timeout=FILLER_TIMEOUT_SECONDS)
+                    except queue.Empty:
+                        # Timeout fired before the first real sentence arrived.
+                        # Speak a filler ONLY if real narration hasn't already
+                        # spoken something for this turn (delegate/plan modes
+                        # narrate via on_status before the agent even starts).
+                        filler_spoken = True
+                        if not orchestrator.narration_fired.is_set():
+                            mouth.speak(random.choice(FILLER_PHRASES))
+                        continue  # back to top — now takes the blocking path below
+                else:
+                    sentence = sentence_queue.get()  # blocking, no timeout
+
                 if sentence is None:
                     break
+
                 mouth.speak(sentence)
+                first_sentence_received = True
 
             # Block until all audio finishes before listening again
             mouth.wait_until_done()
@@ -257,7 +339,7 @@ if __name__ == "__main__":
     try:
         orchestrator, ears, mouth = boot()
         print_banner()
-        mouth.speak("I'm on. Good to see you, sir.")
+        mouth.speak("All systems online. Good to see you, sir.")
         mouth.wait_until_done()
         run_voice_loop(orchestrator, ears, mouth)
 

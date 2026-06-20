@@ -359,7 +359,9 @@ class SystemAgent(BaseAgent):
             "   level, then calculate the appropriate target.\n"
             "4. For screen analysis, always use analyze_screen rather than "
             "   take_screenshot alone — analyze_screen does both in one call.\n"
-            "5. Be concise — confirm what you did in one sentence."
+            "5. After analyze_screen returns a result, summarise it directly "
+            "in your response. Do not call any further tools.\n"
+            "6. Be concise — confirm what you did in one sentence."
         )
 
     def get_tools(self) -> list[dict]:

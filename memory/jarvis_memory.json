@@ -1,8 +1,8 @@
 {
   "metadata": {
     "created": "2026-04-18T10:36:01.108165",
-    "last_updated": "2026-04-25T22:08:17.912432",
-    "total_facts": 33
+    "last_updated": "2026-06-20T21:34:24.908049",
+    "total_facts": 66
   },
   "memories": [
     {
@@ -19,7 +19,7 @@
       "added": "2026-04-18T10:36:01.108177",
       "source": "conversation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 3
     },
     {
       "fact": "The user is asking how Jarvis is.",
@@ -91,7 +91,7 @@
       "added": "2026-04-18T23:32:35.781939",
       "source": "consolidation",
       "importance": 1.0,
-      "access_count": 1
+      "access_count": 2
     },
     {
       "fact": "The user wants to play Bohemian Rhapsody on Apple Music.",
@@ -99,7 +99,7 @@
       "added": "2026-04-18T23:32:35.784458",
       "source": "consolidation",
       "importance": 0.5,
-      "access_count": 0
+      "access_count": 4
     },
     {
       "fact": "The user's name is Shivam.",
@@ -107,7 +107,7 @@
       "added": "2026-04-18T23:32:42.247311",
       "source": "consolidation",
       "importance": 1.0,
-      "access_count": 1
+      "access_count": 2
     },
     {
       "fact": "The user is building an AI system called Jarvis.",
@@ -179,7 +179,7 @@
       "added": "2026-04-19T10:53:13.435036",
       "source": "consolidation",
       "importance": 0.9,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user enjoys listening to ACDC.",
@@ -195,7 +195,7 @@
       "added": "2026-04-19T11:05:41.059838",
       "source": "consolidation",
       "importance": 0.7,
-      "access_count": 0
+      "access_count": 3
     },
     {
       "fact": "The user is interested in playing music by ACDC and Queen.",
@@ -203,7 +203,7 @@
       "added": "2026-04-20T15:23:36.622168",
       "source": "consolidation",
       "importance": 0.1,
-      "access_count": 0
+      "access_count": 2
     },
     {
       "fact": "The user's ability to play specific songs was not mentioned.",
@@ -211,7 +211,7 @@
       "added": "2026-04-20T15:23:36.628161",
       "source": "consolidation",
       "importance": 0.5,
-      "access_count": 0
+      "access_count": 3
     },
     {
       "fact": "The user has a LinkedIn account.",
@@ -267,6 +267,270 @@
       "added": "2026-04-25T22:08:17.912401",
       "source": "consolidation",
       "importance": 0.7,
+      "access_count": 3
+    },
+    {
+      "fact": "The user is attending a wedding.",
+      "category": "personal",
+      "added": "2026-05-13T00:18:50.386523",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 1
+    },
+    {
+      "fact": "The user owns a black linen double-breasted suit.",
+      "category": "personal",
+      "added": "2026-05-13T00:18:50.393786",
+      "source": "consolidation",
+      "importance": 0.4,
+      "access_count": 0
+    },
+    {
+      "fact": "The user uses macOS.",
+      "category": "technical",
+      "added": "2026-05-13T00:18:50.395446",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user likes dramatic and iconic music.",
+      "category": "preferences",
+      "added": "2026-05-13T00:35:24.961522",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user enjoys Queen's songs, especially those with Freddie Mercury at full power.",
+      "category": "preferences",
+      "added": "2026-05-13T00:35:24.972055",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is unable to provide a clear request.",
+      "category": "technical",
+      "added": "2026-05-13T00:35:54.910397",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user asked the assistant to analyze their screen.",
+      "category": "interactions",
+      "added": "2026-05-13T00:38:58.850676",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user was previously employed by Tony Stark.",
+      "category": "personal",
+      "added": "2026-05-13T22:11:03.763744",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is the creator of JARVIS.",
+      "category": "personal",
+      "added": "2026-05-13T22:11:03.769866",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wore a custom-made, strapless, ivory evening gown designed by Oscar de la Renta at their wedding.",
+      "category": "personal",
+      "added": "2026-06-08T23:34:52.975449",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interacting with an AI system called JARVIS and other systems such as Mnemosyne and Hephaestus.",
+      "category": "technical",
+      "added": "2026-06-08T23:34:52.987081",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user asked about Patiala city in Punjab.",
+      "category": "personal",
+      "added": "2026-06-08T23:35:00.500340",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "Patiala is a city in India, specifically in the state of Punjab.",
+      "category": "geography",
+      "added": "2026-06-08T23:35:00.511017",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building an e-bike.",
+      "category": "projects",
+      "added": "2026-06-20T14:36:09.966957",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is considering a scrambler design for their e-bike.",
+      "category": "projects",
+      "added": "2026-06-20T14:36:09.976851",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has knowledge of or interest in designing and building custom motorcycles.",
+      "category": "personal",
+      "added": "2026-06-20T14:36:09.983959",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in adding revenue-generating capabilities to their AI assistant.",
+      "category": "projects",
+      "added": "2026-06-20T14:36:21.523969",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants the AI assistant to generate passive revenue or help with revenue generation on the side.",
+      "category": "goals",
+      "added": "2026-06-20T14:36:21.535351",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building an e-bike, specifically a scrambler design, as their current project.",
+      "category": "projects",
+      "added": "2026-06-20T14:36:21.542311",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to generate revenue through their AI assistant.",
+      "category": "goals",
+      "added": "2026-06-20T14:36:29.941312",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in building an electric bike called a scrambler.",
+      "category": "personal",
+      "added": "2026-06-20T14:36:52.284229",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "JARVIS can be used for market research and competitor analysis in financial opportunities.",
+      "category": "technical",
+      "added": "2026-06-20T14:36:52.301447",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a potential niche content business idea that could be monetized through ads, subscriptions, or sponsorships.",
+      "category": "projects",
+      "added": "2026-06-20T14:36:52.312420",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has an e-bike scrambler project.",
+      "category": "personal",
+      "added": "2026-06-20T14:37:08.661619",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to create content on their e-bike build.",
+      "category": "projects",
+      "added": "2026-06-20T14:37:08.672007",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in creating a dual format content approach with short form and long form content.",
+      "category": "preferences",
+      "added": "2026-06-20T14:37:08.681671",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to create music-based, fast-paced reels for their e-bike build project.",
+      "category": "projects",
+      "added": "2026-06-20T14:37:08.690659",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in creating long form content that would help a community of builders and future makers.",
+      "category": "preferences",
+      "added": "2026-06-20T14:37:08.702410",
+      "source": "consolidation",
+      "importance": 0.4,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's primary platforms for content creation are Instagram Reels, YouTube Shorts, and TikTok.",
+      "category": "technical",
+      "added": "2026-06-20T14:37:23.057205",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's goal with short-form content is to evoke emotion and aesthetic appeal rather than provide information.",
+      "category": "preferences",
+      "added": "2026-06-20T14:37:23.069702",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building a YouTube channel focused on technical breakdowns of build projects, aimed at converting viewers into a community and customers.",
+      "category": "projects",
+      "added": "2026-06-20T14:37:23.084586",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user requires assistance with scriptwriting for long-form episodes, shot lists for cinematic reels, music selection, market research, and brand identity development.",
+      "category": "personal",
+      "added": "2026-06-20T14:37:23.102624",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to use the scribe agent to write markdown files for project documentation and general documents.",
+      "category": "preferences",
+      "added": "2026-06-20T21:34:24.908037",
+      "source": "consolidation",
+      "importance": 0.6,
       "access_count": 0
     }
   ]

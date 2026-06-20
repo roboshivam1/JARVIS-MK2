@@ -12,6 +12,12 @@
 # a data store — it has no LLM logic of its own. All intelligence (deciding
 # what to store, what to search for) lives in the memory_agent.
 #
+# CHANGES FROM PREVIOUS VERSION:
+# - No Greek names in code. "MNEMOSYNE" only appears in comments as lore
+#   context, never as a class name, variable, or print prefix.
+# - Print statements use "[memory]" as the label prefix.
+# - No other functional changes — the storage logic was already solid.
+#
 # DATA STRUCTURE:
 # The vault is a flat JSON file structured as:
 # {
@@ -87,7 +93,7 @@ def _make_entry(
 
 def _similarity(a: str, b: str) -> float:
     """
-    Returns a 0.0-1.0 similarity score between two strings using
+    Returns a 0.0–1.0 similarity score between two strings using
     difflib's SequenceMatcher — no external dependencies required.
 
     Used for deduplication: two facts above DUPLICATE_THRESHOLD are
@@ -356,34 +362,100 @@ class MemoryVault:
 
         return "\n".join(lines)
 
-    def get_core_profile(self) -> str:
+    def get_core_profile(self, max_facts: int = 40) -> str:
         """
-        Returns the most important user facts for injection into JARVIS's
-        system prompt at boot.
+        Returns a rich set of working memory for injection into JARVIS's
+        OWN system prompt — not delegated through memory_agent.
 
-        Pulls the top 10 highest-importance facts from "user_profile" and
-        "preferences" categories. This gives JARVIS baseline knowledge about
-        the user without overloading the system prompt with everything in
-        the vault.
+        WHY THIS METHOD MATTERS SO MUCH:
+        This is the core fix for JARVIS's memory architecture. Previously
+        this pulled only 10 facts from two categories, meaning most
+        "remember X" queries had to delegate to memory_agent — a full
+        agent round trip (LLM call → tool call → LLM call) just to recall
+        something that should already be "known."
 
-        Called once at startup by the Orchestrator when building JARVIS's
-        initial system prompt.
+        ChatGPT's memory feels instant because saved facts are injected
+        directly into context with ZERO retrieval step at inference time.
+        This method is JARVIS's equivalent: a curated set of facts that
+        live directly in his own system prompt, so a large fraction of
+        "what do you know about X" questions get answered in _handle_direct()
+        with no delegation at all.
+
+        SCORING — pulls from ALL categories, not just user_profile/preferences:
+        Projects, technical facts, and personal context are just as likely
+        to come up in conversation as stated preferences. The scoring
+        combines importance and recency, same philosophy as search() but
+        applied across the whole vault rather than a query-matched subset.
+
+        Args:
+            max_facts: How many facts to include. 40 is a reasonable budget —
+                       enough breadth to cover most working-memory needs
+                       without bloating the system prompt to the point where
+                       it costs meaningfully more per call or dilutes focus.
+
+        Returns:
+            A formatted string grouped by category, ready to append to
+            JARVIS's system prompt. Empty string if vault has no memories.
+
+        Called by the Orchestrator at boot AND periodically refreshed
+        during long sessions via refresh_working_memory() so facts learned
+        mid-session (via memory_agent.store_memory or consolidation) become
+        part of JARVIS's own context without a restart.
         """
-        relevant = [
-            e for e in self._vault["memories"]
-            if e.get("category") in ("user_profile", "preferences")
-        ]
-        relevant.sort(key=lambda e: e.get("importance", 0.5), reverse=True)
-        top = relevant[:10]
+        memories = self._vault.get("memories", [])
+        if not memories:
+            return ""
+
+        scored = []
+        for entry in memories:
+            importance = entry.get("importance", 0.5)
+
+            try:
+                added    = datetime.fromisoformat(entry["added"])
+                days_old = (datetime.now() - added).days
+                recency  = max(0.0, (60 - days_old) / 60)  # decays over 60 days
+            except (ValueError, KeyError):
+                recency = 0.0
+
+            # Importance weighted higher than recency — a long-standing
+            # important fact should outrank a trivial recent one, but
+            # recency still matters for keeping the working set current
+            score = importance * 0.7 + recency * 0.3
+            scored.append((score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [entry for _, entry in scored[:max_facts]]
 
         if not top:
             return ""
 
-        lines = ["[Established facts about the user:]"]
+        # Group by category for readability in the system prompt —
+        # easier for the LLM to scan than one undifferentiated list
+        by_category: dict[str, list[str]] = {}
         for entry in top:
-            lines.append(f"  • {entry['fact']}")
+            cat = entry.get("category", "general")
+            by_category.setdefault(cat, []).append(entry["fact"])
+
+        lines = ["[Working memory — established facts you already know about the user:]"]
+        for category in sorted(by_category.keys()):
+            lines.append(f"\n{category.replace('_', ' ').title()}:")
+            for fact in by_category[category]:
+                lines.append(f"  • {fact}")
 
         return "\n".join(lines)
+
+    def refresh_working_memory(self) -> str:
+        """
+        Convenience wrapper around get_core_profile() for periodic refresh
+        during long sessions.
+
+        WHY THIS EXISTS AS A SEPARATE METHOD:
+        Semantically distinguishes "give me working memory at boot" from
+        "re-check working memory mid-session because new facts may have
+        been stored." Same underlying logic, but the explicit name makes
+        the Orchestrator's periodic refresh calls self-documenting.
+        """
+        return self.get_core_profile()
 
     def remove(self, fact: str) -> str:
         """

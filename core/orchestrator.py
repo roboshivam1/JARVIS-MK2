@@ -44,17 +44,23 @@ JARVIS_SYSTEM_PROMPT = (
     "You are an autonomous system.\n\n"
     "You have a team of specialist agents:\n"
     "  - HERMES    (web_agent):       Internet research and live web content\n"
-    "  - MNEMOSYNE (memory_agent):    Long-term memory — stores and recalls facts\n"
+    "  - MNEMOSYNE (memory_agent):    Long-term memory — deep archive search and storing facts\n"
     "  - HEPHAESTUS (system_agent):   macOS control — apps, volume, screenshots\n"
     "  - APOLLO    (music_agent):     Music playback and Apple Music control\n"
-    "  - ATHENA    (research_agent):  Deep multi-source research and synthesis\n\n"
+    "  - ATHENA    (research_agent):  Deep multi-source research and synthesis\n"
+    "  - PROTEUS   (browser_agent):   Controls any website — downloads, forms, logged-in accounts\n"
+    "  - CALLIOPE  (scribe_agent):    Writes and saves markdown documents from conversation\n\n"
     "Refer to agents by their Greek names in speech. Speak as JARVIS in first person.\n\n"
+    "MEMORY — IMPORTANT:\n"
+    "The 'Working memory' section below (if present) contains facts you already know "
+    "about the user. When asked something covered there, answer directly from it — "
+    "do NOT delegate to MNEMOSYNE for facts you already have in working memory. "
+    "Only delegate to MNEMOSYNE for deep, specific recall not covered in working memory, "
+    "or to store a brand new fact.\n\n"
     "STYLE:\n"
     "- Sharp, concise, direct. No filler. No hollow openers like 'Certainly!'.\n"
     "- Dry wit when appropriate — never forced.\n"
     "- Lead with the answer. Stop when you have said what needs saying.\n"
-    "- Refer to the user as 'sir'. Always talk to the user maintaining his superiority.\n"
-    "- Do not include asterisks in your output, as it will be spoken out loud.\n"
 )
 
 
@@ -129,8 +135,14 @@ class Orchestrator:
         self.on_status  = on_status   # Progress narration callback
         self.logger     = JarvisLogger()
 
+        # Working memory injected directly into JARVIS's OWN system prompt.
+        # This is the fix for memory recall latency — a rich set of facts
+        # lives in context with zero retrieval step, so most "what do you
+        # know about X" queries get answered in _handle_direct() without
+        # ever delegating to memory_agent. See long_term.get_core_profile().
         core_profile = vault.get_core_profile()
-        system       = JARVIS_SYSTEM_PROMPT
+        self._base_system_prompt = JARVIS_SYSTEM_PROMPT  # without memory — kept separate so refresh can rebuild cleanly
+        system = JARVIS_SYSTEM_PROMPT
         if core_profile:
             system += "\n\n" + core_profile
 
@@ -138,6 +150,46 @@ class Orchestrator:
             system_prompt=system,
             label="orchestrator",
         )
+
+        # Tracks turns since working memory was last refreshed.
+        # New facts stored mid-session (via memory_agent.store_memory or
+        # background consolidation) wouldn't otherwise reach JARVIS's own
+        # context until a restart. Periodic refresh closes that gap.
+        self._turns_since_memory_refresh = 0
+
+    # -------------------------------------------------------------------------
+    # Working Memory Refresh
+    # -------------------------------------------------------------------------
+
+    def _maybe_refresh_working_memory(self) -> None:
+        """
+        Periodically rebuilds JARVIS's system prompt with fresh working
+        memory from the vault.
+
+        WHY THIS IS NEEDED:
+        Working memory is loaded once at __init__ time. If memory_agent
+        stores a new fact mid-session (you say "remember that I prefer X"),
+        that fact lives in the vault immediately — but JARVIS's own system
+        prompt was already built and won't reflect it until this refresh runs.
+
+        Runs every WORKING_MEMORY_REFRESH_INTERVAL turns. Cheap — it's just
+        a vault read (no LLM call) and a string rebuild, not worth doing
+        every single turn but worth doing periodically during long sessions.
+        """
+        from config import WORKING_MEMORY_REFRESH_INTERVAL
+
+        self._turns_since_memory_refresh += 1
+        if self._turns_since_memory_refresh < WORKING_MEMORY_REFRESH_INTERVAL:
+            return
+
+        self._turns_since_memory_refresh = 0
+        core_profile = self.vault.refresh_working_memory()
+        system = self._base_system_prompt
+        if core_profile:
+            system += "\n\n" + core_profile
+
+        self.memory.update_system_prompt(system)
+        print("[orchestrator] Working memory refreshed.")
 
     # -------------------------------------------------------------------------
     # Main Entry Point
@@ -168,6 +220,11 @@ class Orchestrator:
         """
         print(f"\n[orchestrator] Input: {user_input}")
         start_ms = int(time.time() * 1000)
+
+        # Refresh working memory periodically so facts stored mid-session
+        # (via memory_agent or background consolidation) reach JARVIS's
+        # own context without requiring a restart
+        self._maybe_refresh_working_memory()
 
         classification = self._classify(user_input)
         print(f"[orchestrator] Classification: {classification}")
@@ -290,11 +347,28 @@ class Orchestrator:
         plan = TaskPlan(goal=user_input, tasks=[task])
 
         # Narrate before delegating so JARVIS doesn't go silent
-        # We do a quick pre-routing check to name the agent in the narration
-        self.dispatcher._detect_explicit_agent(task)  # populates task.assigned_agent hint
-        agent_name    = self.dispatcher._resolve_agent(task)
-        display_name  = self._agent_display_name(agent_name)
+        self.dispatcher._detect_explicit_agent(task)
+        agent_name   = self.dispatcher._resolve_agent(task)
+        display_name = self._agent_display_name(agent_name)
         self._narrate(f"Let me have {display_name} handle that.")
+
+        # ── Scribe context injection ───────────────────────────────────────────
+        # CALLIOPE needs the conversation history to know what to document.
+        # No other agent needs this — only the scribe synthesises from chat.
+        # We inject the last 60 transcript lines as context so CALLIOPE has
+        # the full recent conversation available when writing.
+        if agent_name == "scribe_agent":
+            transcript_lines = self.memory.get_transcript_lines()
+            if transcript_lines:
+                # Take last 60 lines (~30 exchanges) — enough context without
+                # overwhelming the model with irrelevant earlier conversation
+                recent  = transcript_lines[-60:]
+                history = "\n".join(recent)
+                task.context = (
+                    "CONVERSATION HISTORY (most recent exchanges):\n"
+                    + history
+                    + "\n\nUse this conversation as the source material for the document."
+                )
 
         completed_plan = self.dispatcher.execute(plan)
         result_task    = completed_plan.tasks[0]

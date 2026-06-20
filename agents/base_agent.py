@@ -89,14 +89,29 @@ class BaseAgent(ABC):
             def get_tool_map(self): return WEB_TOOLS_MAP
     """
 
-    def __init__(self, name: str):
+    def __init__(
+        self,
+        name:     str,
+        model:    str = None,
+        provider: str = None,
+    ):
         """
         Args:
-            name: The functional name of this agent, matching the key in
-                  AGENT_REGISTRY in config.py. e.g. "web_agent", "music_agent".
-                  Used in log output and result dicts.
+            name:     Functional agent name matching AGENT_REGISTRY key.
+                      e.g. "web_agent", "scribe_agent"
+            model:    LLM model override. Defaults to AGENT_MODEL (local Ollama).
+                      Pass ORCHESTRATOR_MODEL to use the cloud model for this agent.
+            provider: LLM provider override. Defaults to "ollama".
+                      Pass "anthropic" or "google" for cloud model agents.
+
+        Most agents use the defaults (local Ollama, fast and free).
+        Agents that require higher writing or reasoning quality — like
+        scribe_agent — can opt into the cloud model by passing model and provider.
         """
-        self.name = name
+        from config import AGENT_MODEL
+        self.name     = name
+        self.model    = model    or AGENT_MODEL
+        self.provider = provider or "ollama"
 
     # -------------------------------------------------------------------------
     # Abstract Methods — Every Subclass MUST Implement These
@@ -207,6 +222,10 @@ class BaseAgent(ABC):
         # We loop up to MAX_AGENT_ITERATIONS times.
         # Each iteration: call the LLM → handle tool calls or text response.
         # The loop exits when the LLM produces a text response (the answer)
+        # Accumulates every tool result so task.result contains actual
+        # data, not just the model's confirmation summary.
+        tool_results: list[str] = []
+
         # or when we've exhausted the iteration limit.
         for iteration in range(1, MAX_AGENT_ITERATIONS + 1):
             print(f"  [{self.name}] Iteration {iteration}/{MAX_AGENT_ITERATIONS}")
@@ -214,10 +233,20 @@ class BaseAgent(ABC):
             # Import inside the method to avoid circular imports.
             # base_agent.py → llm.py → config.py is fine, but keeping
             # heavy imports lazy in abstract modules is good practice.
-            from core.llm import agent_tool_call
+            from core.llm import tool_call, agent_tool_call
 
             try:
-                response = agent_tool_call(messages=messages, tools=tools)
+                # Use cloud model if this agent was constructed with one,
+                # otherwise use the default local Ollama agent model.
+                if self.provider != "ollama":
+                    response = tool_call(
+                        messages=messages,
+                        tools=tools,
+                        model=self.model,
+                        provider=self.provider,
+                    )
+                else:
+                    response = agent_tool_call(messages=messages, tools=tools)
             except Exception as e:
                 # LLM call itself failed (network error, bad response, etc.)
                 error_msg = f"LLM call failed on iteration {iteration}: {e}"
@@ -231,10 +260,19 @@ class BaseAgent(ABC):
             # ── Case A: Model wants to call tools ─────────────────────────────
             if response.has_tool_calls:
                 # Append the assistant's tool-call decision to message history
-                # so the model remembers what it already decided to do
+                # so the model remembers what it already decided to do.
+                #
+                # We preserve the full tool_calls list (including each call's
+                # "id") on this message. Providers that require strict id
+                # matching between a tool_use block and its tool_result —
+                # Anthropic and OpenAI — read this back out in their message
+                # conversion (see core/llm.py _messages_to_anthropic /
+                # _messages_to_openai). Providers that don't need ids
+                # (Ollama, Google) simply ignore this extra field.
                 messages.append({
-                    "role":    "assistant",
-                    "content": response.text or "",
+                    "role":       "assistant",
+                    "content":    response.text or "",
+                    "tool_calls": response.tool_calls,
                 })
 
                 # Execute each requested tool and append the results
@@ -245,9 +283,17 @@ class BaseAgent(ABC):
                     result = self._execute_tool(tool_name, arguments)
                     print(f"  [{self.name}] Tool: {tool_name}({arguments}) → {str(result)[:100]}")
 
+                    # Capture tool result for inclusion in task.result
+                    tool_results.append(f"[{tool_name}]:\n{str(result)}")
+
+                    # tool_call_id carries the matching id forward so
+                    # Anthropic/OpenAI can pair this result with the
+                    # tool_use block above when the next request is built.
                     messages.append({
-                        "role":    "tool",
-                        "content": str(result),
+                        "role":         "tool",
+                        "content":      str(result),
+                        "tool_call_id": tc.get("id"),
+                        "name":         tool_name,
                     })
 
                 # Loop back — model will now read the tool results and either
@@ -273,15 +319,33 @@ class BaseAgent(ABC):
                 print(f"  [{self.name}] Leaked tool call detected: {tool_name}({arguments})")
                 result = self._execute_tool(tool_name, arguments)
                 print(f"  [{self.name}] Tool: {tool_name}({arguments}) → {str(result)[:100]}")
+                tool_results.append(f"[{tool_name}]:\n{str(result)}")
+                # No real id exists here (the model never made a structured
+                # tool call) — tool_call_id is left absent. This path is only
+                # ever hit with Ollama-based agents (Llama leaking text), which
+                # don't require id matching, so this is safe.
                 messages.append({"role": "assistant", "content": answer})
                 messages.append({"role": "tool",      "content": str(result)})
                 continue  # Loop back so model can produce a clean text summary
 
             print(f"  [{self.name}] Done.")
+
+            # Build the full result from tool outputs + model's summary.
+            # tool_results contains the raw data (screen analysis, web content,
+            # etc). answer is the model's natural language summary of it.
+            # We combine both so the orchestrator's _synthesise_response()
+            # gets the actual data, not just a one-line confirmation.
+            if tool_results:
+                full_result = "\n\n".join(tool_results)
+                if answer and answer.lower() not in ("confirmed.", "done.", "ok."):
+                    full_result += "\n\nAgent summary: " + answer
+            else:
+                full_result = answer
+
             return self._build_result(
                 status="done",
                 summary=self._make_summary(answer),
-                result=answer,
+                result=full_result,
             )
 
         # ── Iteration limit reached without a text response ───────────────────
@@ -360,97 +424,65 @@ class BaseAgent(ABC):
     # Subclasses can override this for more sophisticated summarisation.
     # -------------------------------------------------------------------------
 
-    def _extract_leaked_tool_call(
-        self, text: str, tool_map: dict
-    ):
-        """
-        Detects and parses Llama's tool-call syntax when it leaks into text.
-
-        llama3.1:8b sometimes outputs tool calls as plain text instead of
-        structured tool_calls. It uses its own token format:
-          <|python_tag|>play_global_search(query="Thunderstruck")
-          <|python_tag|>tool.call("search_web", {"query": "news"})
-
-        We detect the <|python_tag|> sentinel, extract the function name
-        and arguments, and return them so the run loop can execute the tool
-        properly instead of treating this text as the final answer.
-
-        Returns:
-            (tool_name, arguments_dict) if a valid leaked call is found.
-            None if no leak is detected or parsing fails.
-        """
-        import re, json
+    def _extract_leaked_tool_call(self, text: str, tool_map: dict):
+        # Detects Llama tool-call syntax leaking into text output.
+        # llama3.1:8b sometimes emits: <|python_tag|>play_global_search(query="X")
+        # Returns (tool_name, arguments_dict) or None.
+        import re
+        import json
 
         if "<|python_tag|>" not in text:
             return None
 
-        # Strip the token and everything before it
         after_tag = text.split("<|python_tag|>", 1)[1].strip()
 
-        # Pattern 1: tool.call("func_name", {...})
-        # e.g. tool.call("play_global_search", {"query": "Thunderstruck"})
-        m = re.match(r'tool\.call\(["\'](\w+)["\'\],\s*(\{.*?\})\)', after_tag, re.DOTALL)
-        if m:
-            name = m.group(1)
-            try:
-                args = json.loads(m.group(2))
-                if name in tool_map:
-                    return name, args
-            except (json.JSONDecodeError, ValueError):
-                pass
+        for tool_name in tool_map:
+            if tool_name not in after_tag:
+                continue
 
-        # Pattern 2: tool_call('func_name', args_string)
-        # e.g. tool_call('play_global_search', "query=Thunderstruck")
-        m = re.match(r'tool_call\(["\'](\w+)["\'\],\s*(.+?)\)$', after_tag, re.DOTALL)
-        if m:
-            name = m.group(1)
-            if name in tool_map:
-                # Try to parse the args as JSON first, then as keyword string
-                raw_args = m.group(2).strip().strip("\"'")
-                try:
-                    args = json.loads(raw_args)
-                    return name, args
-                except (json.JSONDecodeError, ValueError):
-                    # Keyword string like "query=Thunderstruck" — use first tool param
-                    tools = self.get_tools()
-                    for t in tools:
-                        fn = t.get("function", {})
-                        if fn.get("name") == name:
-                            props = fn.get("parameters", {}).get("properties", {})
-                            if props:
-                                first_param = list(props.keys())[0]
-                                return name, {first_param: raw_args}
+            escaped = re.escape(tool_name)
 
-        # Pattern 3: func_name(key="value", ...)  — direct call syntax
-        # e.g. play_global_search(query="Bohemian Rhapsody")
-        m = re.match(r'(\w+)\((.*)\)$', after_tag, re.DOTALL)
-        if m:
-            name = m.group(1)
-            if name in tool_map:
-                raw_args = m.group(2).strip()
-                # Parse keyword arguments
+            # Pattern A: tool_name(key="value") or tool_name(key='value')
+            m = re.search(escaped + r"\(([^)]*)\)", after_tag)
+            if m:
+                args_str = m.group(1).strip()
                 args = {}
-                # Try key="value" or key='value' pairs
-                for kv in re.finditer(r'(\w+)\s*=\s*["\'](.*?)["\']', raw_args):
+                for kv in re.finditer(r'(\w+)\s*=\s*"([^"]*)"', args_str):
                     args[kv.group(1)] = kv.group(2)
                 if not args:
-                    # No quoted values — try key=value (unquoted)
-                    for kv in re.finditer(r'(\w+)\s*=\s*([^,]+)', raw_args):
-                        args[kv.group(1)] = kv.group(2).strip()
+                    for kv in re.finditer(r"(\w+)\s*=\s*'([^']*)'", args_str):
+                        args[kv.group(1)] = kv.group(2)
                 if args:
-                    return name, args
-                # Single positional arg — use first parameter
-                if raw_args:
-                    tools = self.get_tools()
-                    for t in tools:
-                        fn = t.get("function", {})
-                        if fn.get("name") == name:
-                            props = fn.get("parameters", {}).get("properties", {})
-                            if props:
-                                first_param = list(props.keys())[0]
-                                return name, {first_param: raw_args.strip('"\' ')}
+                    return tool_name, args
+                if args_str:
+                    first_param = self._get_first_param(tool_name)
+                    if first_param:
+                        val = args_str.strip('"').strip("'").strip()
+                        return tool_name, {first_param: val}
 
-        return None  # No valid leaked tool call found
+            # Pattern B: "tool_name", {...}  (tool.call style)
+            json_pat = '"' + re.escape(tool_name) + r'",\s*(\{[^}]*\})'
+            m = re.search(json_pat, after_tag)
+            if m:
+                try:
+                    args = json.loads(m.group(1))
+                    if isinstance(args, dict):
+                        return tool_name, args
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        return None
+
+    def _get_first_param(self, tool_name: str):
+        # Returns the first parameter name of a tool schema, or None.
+        for t in self.get_tools():
+            fn = t.get("function", {})
+            if fn.get("name") == tool_name:
+                props = fn.get("parameters", {}).get("properties", {})
+                if props:
+                    return list(props.keys())[0]
+        return None
+
 
     def _make_summary(self, full_answer: str) -> str:
         """
