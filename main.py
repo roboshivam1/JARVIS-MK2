@@ -45,6 +45,7 @@ from agents.music_agent import MusicAgent
 from agents.research_agent import ResearchAgent
 from agents.browser_agent import BrowserAgent
 from agents.scribe_agent import ScribeAgent
+from agents.coding_agent import CodingAgent
 from core.orchestrator import Orchestrator
 from in_out.stt import SpeechToText
 from in_out.tts import TextToSpeech
@@ -129,6 +130,7 @@ def boot() -> tuple:
         "research_agent": ResearchAgent(),
         "browser_agent":  BrowserAgent(),
         "scribe_agent":   ScribeAgent(),
+        "coding_agent":   CodingAgent(),
     }
     print(f"[boot] Agents loaded: {', '.join(agents.keys())}")
 

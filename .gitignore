@@ -21,3 +21,6 @@ voices-v1.0.bin
 testing/
 
 agents/browser_agent.py
+
+workspace/
+sandbox/

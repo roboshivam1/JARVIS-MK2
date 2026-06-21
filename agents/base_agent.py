@@ -68,7 +68,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from config import MAX_AGENT_ITERATIONS
 
 
 # =============================================================================
@@ -91,27 +90,36 @@ class BaseAgent(ABC):
 
     def __init__(
         self,
-        name:     str,
-        model:    str = None,
-        provider: str = None,
+        name:           str,
+        model:          str = None,
+        provider:       str = None,
+        max_iterations: int = None,
     ):
         """
         Args:
-            name:     Functional agent name matching AGENT_REGISTRY key.
-                      e.g. "web_agent", "scribe_agent"
-            model:    LLM model override. Defaults to AGENT_MODEL (local Ollama).
-                      Pass ORCHESTRATOR_MODEL to use the cloud model for this agent.
-            provider: LLM provider override. Defaults to "ollama".
-                      Pass "anthropic" or "google" for cloud model agents.
+            name:           Functional agent name matching AGENT_REGISTRY key.
+                            e.g. "web_agent", "scribe_agent"
+            model:          LLM model override. Defaults to AGENT_MODEL (local Ollama).
+                            Pass ORCHESTRATOR_MODEL to use the cloud model for this agent.
+            provider:       LLM provider override. Defaults to "ollama".
+                            Pass "anthropic" or "google" for cloud model agents.
+            max_iterations: Per-agent override for how many tool-call rounds
+                            this agent gets before giving up. Defaults to the
+                            global MAX_AGENT_ITERATIONS from config. Coding
+                            tasks legitimately need more rounds than a single
+                            web search or system command — write, run, read
+                            error, fix, run again is a normal 6+ step cycle —
+                            so coding_agent passes a higher value here.
 
         Most agents use the defaults (local Ollama, fast and free).
         Agents that require higher writing or reasoning quality — like
         scribe_agent — can opt into the cloud model by passing model and provider.
         """
-        from config import AGENT_MODEL
-        self.name     = name
-        self.model    = model    or AGENT_MODEL
-        self.provider = provider or "ollama"
+        from config import AGENT_MODEL, MAX_AGENT_ITERATIONS
+        self.name           = name
+        self.model          = model          or AGENT_MODEL
+        self.provider       = provider       or "ollama"
+        self.max_iterations = max_iterations or MAX_AGENT_ITERATIONS
 
     # -------------------------------------------------------------------------
     # Abstract Methods — Every Subclass MUST Implement These
@@ -227,8 +235,8 @@ class BaseAgent(ABC):
         tool_results: list[str] = []
 
         # or when we've exhausted the iteration limit.
-        for iteration in range(1, MAX_AGENT_ITERATIONS + 1):
-            print(f"  [{self.name}] Iteration {iteration}/{MAX_AGENT_ITERATIONS}")
+        for iteration in range(1, self.max_iterations + 1):
+            print(f"  [{self.name}] Iteration {iteration}/{self.max_iterations}")
 
             # Import inside the method to avoid circular imports.
             # base_agent.py → llm.py → config.py is fine, but keeping
@@ -351,12 +359,12 @@ class BaseAgent(ABC):
         # ── Iteration limit reached without a text response ───────────────────
         # The model got stuck in a tool-calling loop without converging.
         # This can happen with small models on complex tasks.
-        print(f"  [{self.name}] Failed: exhausted {MAX_AGENT_ITERATIONS} iterations.")
+        print(f"  [{self.name}] Failed: exhausted {self.max_iterations} iterations.")
         return self._build_result(
             status="failed",
             summary=(
                 f"{self.name} could not complete the task within "
-                f"{MAX_AGENT_ITERATIONS} steps."
+                f"{self.max_iterations} steps."
             ),
             result="Max iterations reached without producing a response.",
         )

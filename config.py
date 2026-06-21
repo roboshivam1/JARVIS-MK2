@@ -95,6 +95,22 @@ VISION_MODEL        = "llava"
 CALLIOPE_MODEL    = "claude-sonnet-4-6"
 CALLIOPE_PROVIDER = "anthropic"
 
+# ── DAEDALUS (coding_agent) uses cloud model — debugging is multi-step ────────
+# causal reasoning where the gap between local and frontier models is largest.
+# A misdiagnosed bug produces confidently WORSE code, not just a weaker answer —
+# reliability matters more here than almost anywhere else in the system.
+DAEDALUS_MODEL    = "claude-sonnet-4-6"
+DAEDALUS_PROVIDER = "anthropic"
+
+# Coding tasks legitimately need more rounds than other agents — write, run,
+# read error, fix, run again is a normal cycle. 20 gives enough room for
+# real debugging without letting a stuck loop run forever.
+DAEDALUS_MAX_ITERATIONS = 20
+
+# Per-command/script execution timeout (seconds). Prevents a hung or
+# infinite-looping script from blocking the agent indefinitely.
+DAEDALUS_EXEC_TIMEOUT = 30
+
 
 # -----------------------------------------------------------------------------
 # SPEECH I/O
@@ -144,6 +160,7 @@ AGENT_ALIASES = {
     "athena":     "research_agent",
     "proteus":    "browser_agent",
     "calliope":   "scribe_agent",
+    "daedalus":   "coding_agent",
 }
 
 AGENT_REGISTRY = {
@@ -205,6 +222,22 @@ AGENT_REGISTRY = {
             "add to", "append to", "update the document",
         ],
     },
+    "coding_agent": {
+        "description": (
+            "Writes, runs, and debugs code in a sandboxed environment. Iterates "
+            "until the code actually works — writes, executes, reads errors, "
+            "fixes, and re-runs. Use for scripts, automation, debugging existing "
+            "code, or any task requiring real code execution."
+        ),
+        "best_for": [
+            "write a script", "write code", "write a function",
+            "debug", "fix this code", "fix the bug",
+            "run this", "execute", "test this code",
+            "daedalus", "coding agent",
+            "automation script", "python script",
+            "build a tool", "write a program",
+        ],
+    },
 }
 
 
@@ -215,6 +248,11 @@ AGENT_REGISTRY = {
 # Workspace — where CALLIOPE (scribe_agent) writes all documents
 WORKSPACE_DIR = "workspace"
 
+# Sandbox — where DAEDALUS (coding_agent) reads, writes, and executes code.
+# Kept entirely separate from WORKSPACE_DIR — code execution and document
+# writing have different risk profiles and shouldn't share a directory.
+SANDBOX_DIR = "sandbox"
+
 REQUIRED_DIRECTORIES = [
     "memory",
     "logs",
@@ -224,6 +262,7 @@ REQUIRED_DIRECTORIES = [
     "workspace/brainstorms",
     "workspace/notes",
     "workspace/research",
+    "sandbox",
 ]
 
 def ensure_directories():
