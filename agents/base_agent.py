@@ -94,6 +94,7 @@ class BaseAgent(ABC):
         model:          str = None,
         provider:       str = None,
         max_iterations: int = None,
+        max_tokens:     int = None,
     ):
         """
         Args:
@@ -110,6 +111,22 @@ class BaseAgent(ABC):
                             web search or system command — write, run, read
                             error, fix, run again is a normal 6+ step cycle —
                             so coding_agent passes a higher value here.
+            max_tokens:     Per-agent override for the LLM response token budget
+                            PER TOOL CALL. Defaults to 1024 (core/llm.py's
+                            default), which is fine for agents whose tool
+                            arguments are short (a search query, a file path).
+                            It is NOT enough for an agent whose tool arguments
+                            include entire file contents — write_file's
+                            "content" value competes with everything else in
+                            the same 1024-token budget. If a tool call runs out
+                            of tokens mid-generation, the incomplete final
+                            argument is silently dropped from the parsed JSON
+                            rather than raising a clear error — which looks
+                            exactly like the model "forgetting" a required
+                            argument, repeating identically every iteration
+                            since the same prompt hits the same ceiling every
+                            time. coding_agent passes a much higher value here
+                            for exactly this reason.
 
         Most agents use the defaults (local Ollama, fast and free).
         Agents that require higher writing or reasoning quality — like
@@ -120,6 +137,7 @@ class BaseAgent(ABC):
         self.model          = model          or AGENT_MODEL
         self.provider       = provider       or "ollama"
         self.max_iterations = max_iterations or MAX_AGENT_ITERATIONS
+        self.max_tokens     = max_tokens     or 1024
 
     # -------------------------------------------------------------------------
     # Abstract Methods — Every Subclass MUST Implement These
@@ -246,15 +264,23 @@ class BaseAgent(ABC):
             try:
                 # Use cloud model if this agent was constructed with one,
                 # otherwise use the default local Ollama agent model.
+                # max_tokens is always passed explicitly here — see the
+                # __init__ docstring for why the 1024-token default silently
+                # truncates tool arguments that contain file content.
                 if self.provider != "ollama":
                     response = tool_call(
                         messages=messages,
                         tools=tools,
                         model=self.model,
                         provider=self.provider,
+                        max_tokens=self.max_tokens,
                     )
                 else:
-                    response = agent_tool_call(messages=messages, tools=tools)
+                    response = agent_tool_call(
+                        messages=messages,
+                        tools=tools,
+                        max_tokens=self.max_tokens,
+                    )
             except Exception as e:
                 # LLM call itself failed (network error, bad response, etc.)
                 error_msg = f"LLM call failed on iteration {iteration}: {e}"

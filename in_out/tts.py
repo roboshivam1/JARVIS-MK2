@@ -7,28 +7,39 @@
 #
 # THE PIPELINE — why gaps are eliminated:
 #
-# Old approach (sequential, caused gaps):
-#   sentence → synthesise (2s) → play (2s) → [GAP] → synthesise next...
-#
-# New approach (two concurrent threads, no gaps):
-#
 #   speak(text) puts sentence in text_queue
 #
 #   [Synthesis Thread]              [Playback Thread]
 #   reads text_queue                reads audio_queue
-#   calls kokoro.create()           calls afplay
+#   calls kokoro.create()           runs afplay/say as a tracked subprocess
 #   puts numpy array in audio_queue
 #
 # While sentence N is PLAYING in the playback thread,
 # the synthesis thread is already synthesising sentence N+1.
-# When N finishes, N+1 is already in audio_queue — zero wait.
 #
-# SENTINEL PATTERN:
-# wait_until_done() needs to know when both threads have fully processed
-# the current batch. It pushes a special sentinel object into text_queue.
-# The sentinel flows through synthesis → audio_queue unchanged.
-# When the playback thread sees it, it sets a threading.Event.
-# wait_until_done() blocks on that Event — clean synchronisation.
+# CHANGES FOR BARGE-IN SUPPORT:
+#
+# 1. is_speaking() — a non-blocking check of whether JARVIS currently has
+#    anything queued OR actively playing. main.py's voice loop polls this
+#    (instead of only ever blocking on wait_until_done()) so it can also
+#    check for an interrupt key-press in the same loop.
+#
+#    Implemented via a counter (_pending_count) rather than just checking
+#    "are both queues empty?" — that check alone has a race: right after
+#    item N finishes playing, item N+1 might not have been PUT into
+#    audio_queue yet (synthesis takes a moment), so the queues could look
+#    momentarily empty even though more speech is still coming. The
+#    counter increments the instant speak() is called and only decrements
+#    after an item has ACTUALLY finished playing, so it can never read
+#    "done" while there's genuinely more speech in flight.
+#
+# 2. stop() now does a TRUE interrupt, not just a queue-drain. Previously
+#    stop() cleared both queues but the sentence ALREADY mid-playback via
+#    afplay/say would keep going until naturally finished — meaning an
+#    "interrupt" still wouldn't actually go silent until the current
+#    sentence ended. Both playback helpers now run as a tracked
+#    subprocess.Popen (instead of subprocess.run) so stop() can terminate
+#    whatever is currently playing immediately.
 # =============================================================================
 
 from __future__ import annotations
@@ -67,17 +78,24 @@ class _AudioItem:
         self.sample_rate = sample_rate
 
 
+class _FallbackItem:
+    """Used when kokoro is unavailable for a specific sentence."""
+    def __init__(self, text: str):
+        self.text = text
+
+
 # =============================================================================
 # TextToSpeech
 # =============================================================================
 
 class TextToSpeech:
     """
-    Pipelined text-to-speech using kokoro_onnx.
+    Pipelined text-to-speech using kokoro_onnx, with barge-in support.
 
     speak(text)         — queues sentence, returns immediately
     wait_until_done()   — blocks until all queued audio has played
-    stop()              — clears all queues (interrupt mid-speech)
+    is_speaking()       — non-blocking check, True if anything queued/playing
+    stop()              — immediately kills active playback and clears queues
     """
 
     def __init__(self):
@@ -85,20 +103,24 @@ class TextToSpeech:
 
         self._engine = self._init_engine()
 
-        # Two queues: text waiting for synthesis, audio waiting for playback
         self._text_queue:  queue.Queue = queue.Queue()
         self._audio_queue: queue.Queue = queue.Queue()
 
-        # Start both worker threads as daemons so they die with the main process
+        # Pending-item counter for is_speaking() — see module docstring
+        # for why this is more correct than checking queue emptiness alone.
+        self._pending_count = 0
+        self._pending_lock  = threading.Lock()
+
+        # Tracks the currently-running afplay/say subprocess so stop() can
+        # kill it immediately rather than waiting for it to finish naturally.
+        self._current_process      = None
+        self._current_process_lock = threading.Lock()
+
         self._synthesis_thread = threading.Thread(
-            target=self._synthesis_worker,
-            daemon=True,
-            name="TTSSynthesis",
+            target=self._synthesis_worker, daemon=True, name="TTSSynthesis",
         )
         self._playback_thread = threading.Thread(
-            target=self._playback_worker,
-            daemon=True,
-            name="TTSPlayback",
+            target=self._playback_worker, daemon=True, name="TTSPlayback",
         )
         self._synthesis_thread.start()
         self._playback_thread.start()
@@ -110,15 +132,8 @@ class TextToSpeech:
     # -------------------------------------------------------------------------
 
     def _init_engine(self) -> str:
-        """
-        Loads the Kokoro ONNX model.
-        Falls back to macOS `say` if model files aren't found or import fails.
-        """
         try:
             from kokoro_onnx import Kokoro
-
-            # v1.0 model files — must be in the working directory
-            # Download from: https://github.com/thewh1teagle/kokoro-onnx/releases
             self._kokoro = Kokoro("kokoro-v1.0.onnx", "voices-v1.0.bin")
             return "kokoro_onnx"
 
@@ -151,53 +166,72 @@ class TextToSpeech:
     def speak(self, text: str) -> None:
         """
         Queues text for synthesis and playback. Returns immediately.
-        The sentence will be spoken as soon as the synthesis thread
-        gets to it and the playback thread is free.
+
+        Increments _pending_count BEFORE queuing — this is what makes
+        is_speaking() correct from the very moment speak() is called,
+        not just once synthesis/playback actually starts.
         """
         if not text or not text.strip():
             return
+        with self._pending_lock:
+            self._pending_count += 1
         self._text_queue.put(text.strip())
 
     def wait_until_done(self) -> None:
         """
         Blocks until all queued sentences have been synthesised AND played.
-
-        Pushes a sentinel into text_queue. The sentinel flows through
-        synthesis → audio_queue → playback thread, which sets the
-        done_event when it sees it. We block on that event.
-
-        If both queues are already empty this returns almost instantly.
+        Unchanged from before — still useful for boot/shutdown messages
+        where interrupt-checking isn't needed, just a simple full wait.
         """
         done_event = threading.Event()
         sentinel   = _Sentinel(done_event)
         self._text_queue.put(sentinel)
         done_event.wait()
 
+    def is_speaking(self) -> bool:
+        """
+        Non-blocking check: True if anything is queued for synthesis,
+        queued for playback, or actively playing right now.
+
+        main.py's voice loop polls this in a loop alongside checking for
+        an interrupt key-press — replacing a plain wait_until_done() call
+        with something that can also notice "the user wants to interrupt"
+        partway through.
+        """
+        with self._pending_lock:
+            return self._pending_count > 0
+
     def stop(self) -> None:
         """
-        Clears all queued text and audio immediately.
-        The sentence currently being synthesised or played finishes —
-        we can't interrupt mid-synthesis or mid-afplay easily.
-        Useful for barge-in / interrupt support.
+        Immediately interrupts speech: kills whatever is actively playing
+        right now (not just clearing what's queued next), drains both
+        queues, and resets the pending counter to zero.
+
+        This is what makes barge-in feel instant rather than "JARVIS
+        finishes this sentence, then stops" — the in-progress afplay/say
+        subprocess is terminated directly.
         """
+        with self._current_process_lock:
+            if self._current_process is not None:
+                try:
+                    self._current_process.terminate()
+                except Exception:
+                    pass
+
         _drain_queue(self._text_queue)
         _drain_queue(self._audio_queue)
+
+        with self._pending_lock:
+            self._pending_count = 0
 
     # -------------------------------------------------------------------------
     # Synthesis Worker Thread
     # -------------------------------------------------------------------------
 
     def _synthesis_worker(self) -> None:
-        """
-        Reads from text_queue, synthesises audio, puts result in audio_queue.
-
-        Sentinels are passed through unchanged so they reach the playback
-        thread and trigger the done_event for wait_until_done().
-        """
         while True:
             item = self._text_queue.get()
 
-            # Pass sentinels straight through to playback thread
             if isinstance(item, _Sentinel):
                 self._audio_queue.put(item)
                 continue
@@ -207,28 +241,23 @@ class TextToSpeech:
                 audio = self._synthesise(text)
                 if audio is not None:
                     self._audio_queue.put(audio)
+                else:
+                    # Synthesis produced nothing — still need to decrement
+                    # the pending count since no playback will happen for it
+                    self._mark_item_finished()
             except Exception as e:
                 print(f"[tts/synthesis] Error for '{text[:40]}': {e}")
-                # Don't let a synthesis error silently drop the sentence —
-                # fall back to say for this specific sentence
                 self._audio_queue.put(_FallbackItem(text))
 
     def _synthesise(self, text: str) -> Optional[_AudioItem]:
-        """
-        Calls kokoro_onnx to produce a numpy audio array.
-        Returns None if synthesis produces no output.
-        """
         if self._engine == "kokoro_onnx" and self._kokoro is not None:
             samples, sample_rate = self._kokoro.create(
-                text=text,
-                voice=TTS_VOICE,
-                speed=1.0,
+                text=text, voice=TTS_VOICE, speed=1.0,
             )
             if samples is None or len(samples) == 0:
                 return None
             return _AudioItem(samples=samples, sample_rate=sample_rate)
 
-        # Non-kokoro engine — use fallback
         return _FallbackItem(text)
 
     # -------------------------------------------------------------------------
@@ -236,10 +265,6 @@ class TextToSpeech:
     # -------------------------------------------------------------------------
 
     def _playback_worker(self) -> None:
-        """
-        Reads from audio_queue and plays each item.
-        Sentinels trigger the done_event to unblock wait_until_done().
-        """
         while True:
             item = self._audio_queue.get()
 
@@ -249,54 +274,66 @@ class TextToSpeech:
 
             try:
                 if isinstance(item, _FallbackItem):
-                    _play_say(item.text)
+                    self._play_say(item.text)
                 elif isinstance(item, _AudioItem):
-                    _play_numpy(item.samples, item.sample_rate)
+                    self._play_numpy(item.samples, item.sample_rate)
             except Exception as e:
                 print(f"[tts/playback] Error: {e}")
+            finally:
+                self._mark_item_finished()
+
+    def _mark_item_finished(self) -> None:
+        """Decrements the pending counter — called once per speak() item,
+        only after it has genuinely finished (played or failed), never
+        just because it was dequeued."""
+        with self._pending_lock:
+            self._pending_count = max(0, self._pending_count - 1)
+
+    # -------------------------------------------------------------------------
+    # Playback — tracked subprocesses so stop() can kill them mid-play
+    # -------------------------------------------------------------------------
+
+    def _play_numpy(self, samples: np.ndarray, sample_rate: int) -> None:
+        """
+        Writes audio to a temp WAV file and plays it with afplay.
+
+        Uses subprocess.Popen (tracked in self._current_process) rather
+        than subprocess.run — this is what lets stop() terminate playback
+        immediately instead of waiting for it to finish naturally.
+        """
+        import soundfile as sf
+
+        tmp_path = os.path.join(
+            tempfile.gettempdir(), f"jarvis_{uuid.uuid4().hex[:8]}.wav",
+        )
+        try:
+            sf.write(tmp_path, samples, sample_rate, subtype="PCM_16")
+
+            with self._current_process_lock:
+                self._current_process = subprocess.Popen(["afplay", tmp_path])
+            self._current_process.wait(timeout=60)
+
+        finally:
+            with self._current_process_lock:
+                self._current_process = None
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def _play_say(self, text: str) -> None:
+        """macOS built-in TTS fallback. Same tracked-Popen pattern as above."""
+        safe = text.replace('"', "'").replace("\\", "")
+        try:
+            with self._current_process_lock:
+                self._current_process = subprocess.Popen(["say", "-v", "Samantha", safe])
+            self._current_process.wait(timeout=60)
+        finally:
+            with self._current_process_lock:
+                self._current_process = None
 
 
 # =============================================================================
-# Fallback Item — carries raw text for `say` playback
+# Module Helpers
 # =============================================================================
-
-class _FallbackItem:
-    """Used when kokoro is unavailable for a specific sentence."""
-    def __init__(self, text: str):
-        self.text = text
-
-
-# =============================================================================
-# Playback Helpers
-# =============================================================================
-
-def _play_numpy(samples: np.ndarray, sample_rate: int) -> None:
-    """
-    Writes audio to a temp WAV file and plays it with afplay.
-
-    afplay blocks until playback finishes — exactly what we want
-    in the playback thread so items play sequentially without overlap.
-    Temp file is deleted immediately after playback.
-    """
-    import soundfile as sf
-
-    tmp_path = os.path.join(
-        tempfile.gettempdir(),
-        f"jarvis_{uuid.uuid4().hex[:8]}.wav",
-    )
-    try:
-        sf.write(tmp_path, samples, sample_rate, subtype="PCM_16")
-        subprocess.run(["afplay", tmp_path], check=True, timeout=60)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
-def _play_say(text: str) -> None:
-    """macOS built-in TTS. Used as fallback when kokoro is unavailable."""
-    safe = text.replace('"', "'").replace("\\", "")
-    subprocess.run(["say", "-v", "Samantha", safe], check=True, timeout=60)
-
 
 def _drain_queue(q: queue.Queue) -> None:
     """Empties a queue without blocking."""

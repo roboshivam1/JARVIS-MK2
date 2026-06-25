@@ -2,11 +2,6 @@
 # agents/coding_agent.py — DAEDALUS, The Coding Agent
 # =============================================================================
 #
-# 8888b.     db    888888 8888b.     db    88     88   88 .dP"Y8
-#  8I  Yb   dPYb   88__    8I  Yb   dPYb   88     88   88 `Ybo."
-#  8I  dY  dP__Yb  88""    8I  dY  dP__Yb  88  .o Y8   8P o.`Y8b
-# 8888Y"  dP""""Yb 888888 8888Y"  dP""""Yb 88ood8 `YbodP' 8bodP'
-#
 # GREEK LORE:
 # Daedalus was the master craftsman of Greek mythology — he built the
 # Labyrinth, designed the wings that let Icarus fly, and was renowned as
@@ -72,7 +67,10 @@ from config import (
     DAEDALUS_MODEL,
     DAEDALUS_PROVIDER,
     DAEDALUS_MAX_ITERATIONS,
+    DAEDALUS_MAX_TOKENS,
     DAEDALUS_EXEC_TIMEOUT,
+    DAEDALUS_COAUTHOR_COMMITS,
+    DAEDALUS_COAUTHOR_TRAILER,
 )
 
 
@@ -450,6 +448,270 @@ def run_command(command: str) -> str:
 
 
 # =============================================================================
+# Git / GitHub Tools
+#
+# DESIGN PRINCIPLES (see config.py comments for the fuller reasoning):
+#
+# 1. ONE PROJECT, ONE REPO — every git operation takes a project_path
+#    pointing at a subfolder WITHIN sandbox/ (e.g. "hn_scraper"), never the
+#    sandbox root itself. This keeps each piece of work as its own
+#    independent repo, exactly like a human developer would organise it,
+#    and means JARVIS's own .gitignore entry for sandbox/ keeps these
+#    nested repos completely invisible to the outer JARVIS repository.
+#
+# 2. YOUR IDENTITY, OPTIONAL DISCLOSURE — commits use whatever git identity
+#    is already configured on this machine (your name, your email). No
+#    separate bot account, no separate credentials. DAEDALUS_COAUTHOR_COMMITS
+#    controls only whether a Co-Authored-By trailer is appended.
+#
+# 3. PUSH IS THE ONLY GATED OPERATION — local commits are cheap and fully
+#    reversible. Pushing makes code visible outside the sandbox, so it
+#    requires confirmed=True. The tool's own description tells DAEDALUS to
+#    only pass that when the user's actual request explicitly asked to
+#    push/publish/upload — not as a default behaviour at the end of a task.
+#
+# 4. NO FORCE-PUSH CAPABILITY AT ALL — rather than trying to detect and
+#    block a dangerous flag after the fact, the tool simply never exposes
+#    --force as an option. The footgun isn't built, so it can't be misused.
+# =============================================================================
+
+def git_init(project_path: str) -> str:
+    """
+    Initialises a new git repository within a sandbox project folder.
+    Also writes a sensible default .gitignore (Python-focused) so the new
+    repo starts clean rather than immediately tracking __pycache__ etc.
+    """
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    os.makedirs(abs_path, exist_ok=True)
+
+    if os.path.exists(os.path.join(abs_path, ".git")):
+        return f"{project_path} is already a git repository."
+
+    try:
+        result = subprocess.run(
+            ["git", "init"], cwd=abs_path,
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return f"git init failed: {result.stderr}"
+
+        # Seed a sensible default .gitignore if one doesn't already exist
+        gitignore_path = os.path.join(abs_path, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write("__pycache__/\n*.pyc\n.venv/\n.env\n*.egg-info/\n.DS_Store\n")
+
+        return f"Initialised git repository in {project_path} (with default .gitignore)."
+    except OSError as e:
+        return f"git init failed: {e}"
+
+
+def git_status(project_path: str) -> str:
+    """Shows uncommitted changes in a sandbox project's git repository."""
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    if not os.path.exists(os.path.join(abs_path, ".git")):
+        return f"{project_path} is not a git repository. Use git_init first."
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--short"], cwd=abs_path,
+            capture_output=True, text=True, timeout=10,
+        )
+        output = result.stdout.strip()
+        return output if output else "Working tree clean — nothing to commit."
+    except OSError as e:
+        return f"git status failed: {e}"
+
+
+def git_commit(project_path: str, message: str) -> str:
+    """
+    Stages all changes and commits them in a sandbox project's git repo.
+
+    Automatically appends the Co-Authored-By trailer if
+    DAEDALUS_COAUTHOR_COMMITS is True in config — this is handled here
+    rather than left to the model, so the convention is applied
+    consistently on every commit rather than depending on the model
+    remembering to add it.
+    """
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    if not os.path.exists(os.path.join(abs_path, ".git")):
+        return f"{project_path} is not a git repository. Use git_init first."
+
+    try:
+        add_result = subprocess.run(
+            ["git", "add", "-A"], cwd=abs_path,
+            capture_output=True, text=True, timeout=15,
+        )
+        if add_result.returncode != 0:
+            return f"git add failed: {add_result.stderr}"
+
+        full_message = message
+        if DAEDALUS_COAUTHOR_COMMITS:
+            full_message += f"\n\n{DAEDALUS_COAUTHOR_TRAILER}"
+
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", full_message], cwd=abs_path,
+            capture_output=True, text=True, timeout=15,
+        )
+
+        if commit_result.returncode != 0:
+            combined = (commit_result.stdout + commit_result.stderr).lower()
+            if "nothing to commit" in combined:
+                return "Nothing to commit — working tree is already clean."
+            return f"git commit failed: {commit_result.stderr or commit_result.stdout}"
+
+        suffix = " (co-authored by DAEDALUS)" if DAEDALUS_COAUTHOR_COMMITS else ""
+        return f"Committed: {message}{suffix}"
+
+    except OSError as e:
+        return f"git commit failed: {e}"
+
+
+def git_push(project_path: str, confirmed: bool = False, remote: str = "origin", branch: str = "") -> str:
+    """
+    Pushes committed changes to a remote repository.
+
+    GATED: requires confirmed=True. Without it, this is a no-op that
+    explains why — DAEDALUS should only pass confirmed=True when the
+    user's actual request explicitly asked to push, publish, or upload
+    the work. If the request only asked to build or save something
+    locally, report the commit is ready and wait for an explicit
+    follow-up rather than pushing automatically.
+
+    Intentionally does not support --force for any remote/branch — that
+    capability simply isn't exposed, removing the risk of an accidental
+    destructive force-push rather than trying to detect and block it.
+    """
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    if not confirmed:
+        return (
+            "Push not executed. This would publish committed code to a remote "
+            "repository, visible outside the sandbox. Only call this again with "
+            "confirmed=true if the user's request explicitly asked to push, "
+            "publish, or upload this work. Otherwise, tell the user the commit "
+            "is ready locally and wait for them to confirm before pushing."
+        )
+
+    if not os.path.exists(os.path.join(abs_path, ".git")):
+        return f"{project_path} is not a git repository."
+
+    try:
+        cmd = ["git", "push", remote]
+        if branch:
+            cmd.append(branch)
+
+        result = subprocess.run(
+            cmd, cwd=abs_path,
+            capture_output=True, text=True, timeout=DAEDALUS_EXEC_TIMEOUT,
+        )
+
+        if result.returncode != 0:
+            return f"git push failed: {result.stderr}"
+
+        branch_suffix = f"/{branch}" if branch else ""
+        return f"Pushed to {remote}{branch_suffix}.\n{result.stdout}{result.stderr}".strip()
+
+    except subprocess.TimeoutExpired:
+        return f"Push timed out after {DAEDALUS_EXEC_TIMEOUT}s."
+    except OSError as e:
+        return f"git push failed: {e}"
+
+
+def git_clone(repo_url: str, project_path: str) -> str:
+    """Clones an existing repository into a new sandbox project folder."""
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    if os.path.exists(abs_path) and os.listdir(abs_path):
+        return f"{project_path} already exists and is not empty."
+
+    try:
+        result = subprocess.run(
+            ["git", "clone", repo_url, abs_path],
+            capture_output=True, text=True, timeout=DAEDALUS_EXEC_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return f"git clone failed: {result.stderr}"
+        return f"Cloned {repo_url} into {project_path}."
+    except subprocess.TimeoutExpired:
+        return f"Clone timed out after {DAEDALUS_EXEC_TIMEOUT}s."
+    except OSError as e:
+        return f"git clone failed: {e}"
+
+
+def github_create_repo(repo_name: str, project_path: str, private: bool = True, description: str = "") -> str:
+    """
+    Creates a new GitHub repository under YOUR account via the 'gh' CLI
+    and links it as the 'origin' remote of an existing local repo.
+
+    Does NOT push automatically — repo creation and pushing are kept as
+    separate steps so the push confirmation gate in git_push is the one
+    and only place that decision is made, rather than duplicating that
+    logic here.
+
+    Requires 'gh' (GitHub CLI) installed and authenticated once via
+    `gh auth login` — JARVIS never handles a GitHub token directly.
+    """
+    try:
+        abs_path = _resolve_safe_path(project_path)
+    except ValueError as e:
+        return str(e)
+
+    if not os.path.exists(os.path.join(abs_path, ".git")):
+        return f"{project_path} is not a git repository yet. Use git_init first."
+
+    visibility = "--private" if private else "--public"
+    cmd = ["gh", "repo", "create", repo_name, visibility, "--source=.", "--remote=origin"]
+    if description:
+        cmd.extend(["--description", description])
+
+    try:
+        result = subprocess.run(
+            cmd, cwd=abs_path,
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode != 0:
+            stderr_lower = result.stderr.lower()
+            if "command not found" in stderr_lower or "not found" in stderr_lower:
+                return (
+                    "GitHub CLI ('gh') is not installed or not authenticated. "
+                    "Run once in a terminal: brew install gh && gh auth login"
+                )
+            return f"Repository creation failed: {result.stderr}"
+
+        return (
+            f"Created GitHub repository '{repo_name}' "
+            f"({'private' if private else 'public'}) and linked as 'origin'.\n"
+            f"{result.stdout.strip()}"
+        )
+
+    except subprocess.TimeoutExpired:
+        return "Repository creation timed out after 30s."
+    except OSError as e:
+        return f"Repository creation failed: {e}"
+
+
+
+# =============================================================================
 # Tool Map and Schema
 # =============================================================================
 
@@ -463,6 +725,12 @@ CODING_TOOLS_MAP = {
     "run_python":   run_python,
     "run_file":     run_file,
     "run_command":  run_command,
+    "git_init":            git_init,
+    "git_status":          git_status,
+    "git_commit":          git_commit,
+    "git_push":            git_push,
+    "git_clone":           git_clone,
+    "github_create_repo":  github_create_repo,
 }
 
 CODING_TOOLS_SCHEMA = [
@@ -595,8 +863,10 @@ CODING_TOOLS_SCHEMA = [
             "name":        "run_command",
             "description": (
                 "Executes a shell command within the sandbox directory — for "
-                "package installation (pip install X), git commands, or other "
-                "tooling. Not for running Python files directly; use run_file for that."
+                "package installation (pip install X) or other general tooling. "
+                "Do NOT use this for git or GitHub operations — use the dedicated "
+                "git_init/git_status/git_commit/git_push/git_clone/github_create_repo "
+                "tools instead, which handle authorship and push confirmation correctly."
             ),
             "parameters": {
                 "type":       "object",
@@ -604,6 +874,109 @@ CODING_TOOLS_SCHEMA = [
                     "command": {"type": "string", "description": "Shell command to run, e.g. 'pip install requests'."}
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "git_init",
+            "description": "Initialises a new git repository in a sandbox project folder. Call once per project before any other git tool.",
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "project_path": {"type": "string", "description": "Subfolder within the sandbox for this project, e.g. 'hn_scraper'."}
+                },
+                "required": ["project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "git_status",
+            "description": "Shows uncommitted changes in a project's git repository.",
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "project_path": {"type": "string", "description": "The project's subfolder within the sandbox."}
+                },
+                "required": ["project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "git_commit",
+            "description": "Stages all changes and commits them in a project's git repository. Authorship trailer is applied automatically based on configuration — do not add it yourself in the message.",
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "project_path": {"type": "string", "description": "The project's subfolder within the sandbox."},
+                    "message":      {"type": "string", "description": "Commit message describing what changed."},
+                },
+                "required": ["project_path", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "git_push",
+            "description": (
+                "Pushes committed changes to a remote repository. ONLY pass "
+                "confirmed=true if the user's request explicitly asked to push, "
+                "publish, or upload this work to GitHub. If they only asked to "
+                "build or save something, leave confirmed as false, report that "
+                "the commit is ready locally, and wait for explicit confirmation."
+            ),
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "project_path": {"type": "string", "description": "The project's subfolder within the sandbox."},
+                    "confirmed":    {"type": "boolean", "description": "Set true ONLY if the user explicitly requested a push/publish/upload."},
+                    "remote":       {"type": "string", "description": "Remote name, default 'origin'."},
+                    "branch":       {"type": "string", "description": "Branch to push, default the current branch."},
+                },
+                "required": ["project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "git_clone",
+            "description": "Clones an existing repository into a new sandbox project folder.",
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "repo_url":     {"type": "string", "description": "URL of the repository to clone."},
+                    "project_path": {"type": "string", "description": "New subfolder within the sandbox to clone into."},
+                },
+                "required": ["repo_url", "project_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name":        "github_create_repo",
+            "description": (
+                "Creates a new GitHub repository under the user's own account and "
+                "links it as the 'origin' remote of an existing local repo. Does "
+                "NOT push — use git_push afterward (with explicit confirmation) "
+                "to actually upload the code."
+            ),
+            "parameters": {
+                "type":       "object",
+                "properties": {
+                    "repo_name":    {"type": "string", "description": "Name for the new GitHub repository."},
+                    "project_path": {"type": "string", "description": "The local project's subfolder within the sandbox."},
+                    "private":      {"type": "boolean", "description": "Whether the repo should be private. Default true."},
+                    "description":  {"type": "string", "description": "Optional repository description."},
+                },
+                "required": ["repo_name", "project_path"],
             },
         },
     },
@@ -633,6 +1006,7 @@ class CodingAgent(BaseAgent):
             model=DAEDALUS_MODEL,
             provider=DAEDALUS_PROVIDER,
             max_iterations=DAEDALUS_MAX_ITERATIONS,
+            max_tokens=DAEDALUS_MAX_TOKENS,
         )
 
     def get_system_prompt(self) -> str:
@@ -651,8 +1025,21 @@ class CodingAgent(BaseAgent):
             "   hypothesis about why it failed, then make a targeted fix.\n"
             "5. Re-run after every fix. Do not declare success without seeing the "
             "   code actually execute correctly.\n"
-            "6. Use run_command only for tooling (pip install, git) — never to "
-            "   re-implement what run_file/run_python already do.\n\n"
+            "6. Use run_command only for tooling (pip install) — never to "
+            "   re-implement what run_file/run_python already do, and never "
+            "   for git/GitHub operations — use the dedicated git tools instead.\n\n"
+            "Git and GitHub:\n"
+            "- Every project that should be version controlled gets its own repo "
+            "  via git_init in its own sandbox subfolder — never the sandbox root.\n"
+            "- Commit locally whenever you reach a working state — this is cheap "
+            "  and reversible, no need to ask first.\n"
+            "- NEVER pass confirmed=true to git_push unless the user's actual "
+            "  request explicitly used words like push, publish, upload, or "
+            "  put this on GitHub. If they only asked you to build or fix "
+            "  something, leave it committed locally and say so — don't push "
+            "  on your own initiative.\n"
+            "- github_create_repo creates the remote but does not push — git_push "
+            "  is always the separate, explicit final step.\n\n"
             "Rules:\n"
             "- Never claim a task is complete without having actually run the code "
             "  and observed correct output in this session.\n"

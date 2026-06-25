@@ -851,7 +851,13 @@ def _ollama_tool_call(
     clean     = _sanitize_for_ollama(messages)
     response  = ollama.chat(model=model, messages=clean, tools=tools, stream=False)
     message   = response.get("message", {})
-    raw_calls = message.get("tool_calls", [])
+    # IMPORTANT: use `or []`, not `.get("tool_calls", [])`. The default in
+    # .get() only applies when the key is MISSING — if Ollama's response
+    # includes "tool_calls": null explicitly (rather than omitting the key
+    # when the model calls no tools), .get() returns None, not the default,
+    # and the list comprehension below would crash with
+    # "'NoneType' object is not iterable". `or []` handles both cases.
+    raw_calls = message.get("tool_calls") or []
 
     tool_calls = [
         {

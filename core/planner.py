@@ -72,15 +72,15 @@ from config import AGENT_REGISTRY, MAX_REPLAN_ATTEMPTS
 #   over-engineering simple requests into multi-step plans
 # =============================================================================
 
-def _build_planning_prompt(goal: str, agent_descriptions: str) -> str:
-    return f"""
-You are a task planning AI for JARVIS, a multi-agent assistant system.
-Break the following goal into an ordered list of atomic tasks.
-
-AVAILABLE AGENTS:
-{agent_descriptions}
-
-PLANNING RULES:
+# Shared planning rules text — used by BOTH the initial planning prompt and
+# the replanning prompt. Previously the replan prompt tried to reuse this
+# via _build_planning_prompt.__doc__, but that function has no docstring at
+# all (it's just an f-string return) — __doc__ evaluated to None, which
+# rendered as the literal string "None" inside the replan prompt. This was
+# confusing the model badly enough that replanning returned an empty task
+# list on every attempt. Extracting the rules into a real string constant
+# fixes this and removes the fragile __doc__ dependency entirely.
+_PLANNING_RULES = """PLANNING RULES:
 1. Each task must be atomic — completable in a single agent session with
    one or a few tool calls. If a task requires multiple distinct actions,
    split it into separate tasks.
@@ -89,12 +89,39 @@ PLANNING RULES:
 3. Order tasks so earlier results feed into later tasks naturally.
 4. Use depends_on to express dependencies — task 3 depending on task 1
    means task 3 will receive task 1's result as context.
-5. agent_hint should be the most appropriate agent name from the list above.
-   It's a suggestion — the system may override it.
+5. agent_hint should be the most appropriate agent name from the list above,
+   based on each agent's FULL description — including any secondary
+   capabilities mentioned (e.g. an agent that writes code may also handle
+   git/GitHub operations if its description says so). It's a suggestion —
+   the system may override it.
 6. If the goal is simple (one agent, one action), return a single task.
-   Do not over-engineer simple requests.
+   Do not over-engineer simple requests. Prefer ONE agent doing several
+   related steps over splitting across multiple agents when one agent's
+   description already covers the full scope of what's needed.
 7. Maximum 6 tasks per plan. If a goal seems to need more, find a way
    to consolidate.
+8. If RECENT CONVERSATION is provided below, use it to resolve pronouns
+   and references in the goal ("that", "this", "the project") — the goal
+   text alone may be ambiguous without it."""
+
+
+def _build_planning_prompt(
+    goal:               str,
+    agent_descriptions: str,
+    conversation_context: str = "",
+) -> str:
+    context_block = ""
+    if conversation_context.strip():
+        context_block = f"\nRECENT CONVERSATION (for resolving references like \"that\"):\n{conversation_context}\n"
+
+    return f"""
+You are a task planning AI for JARVIS, a multi-agent assistant system.
+Break the following goal into an ordered list of atomic tasks.
+
+AVAILABLE AGENTS:
+{agent_descriptions}
+{context_block}
+{_PLANNING_RULES}
 
 GOAL: {goal}
 
@@ -119,22 +146,27 @@ Respond ONLY with valid JSON in exactly this format:
 
 
 def _build_replan_prompt(
-    original_goal:  str,
-    agent_descriptions: str,
-    completed_summary:  str,
-    failure_reason:     str,
+    original_goal:        str,
+    agent_descriptions:   str,
+    completed_summary:    str,
+    failure_reason:       str,
+    conversation_context: str = "",
 ) -> str:
     """
     Builds a prompt for replanning after partial failure.
     Tells the model what was already accomplished so it doesn't redo it.
     """
+    context_block = ""
+    if conversation_context.strip():
+        context_block = f"\nRECENT CONVERSATION (for resolving references like \"that\"):\n{conversation_context}\n"
+
     return f"""
 You are a task planning AI for JARVIS. A previous plan partially failed.
 Create a NEW plan covering only what still needs to be done.
 
 AVAILABLE AGENTS:
 {agent_descriptions}
-
+{context_block}
 ORIGINAL GOAL: {original_goal}
 
 ALREADY COMPLETED:
@@ -146,7 +178,7 @@ REASON PREVIOUS PLAN FAILED:
 Create a focused plan for the REMAINING work only.
 Do not re-do what was already completed successfully.
 
-{_build_planning_prompt.__doc__}
+{_PLANNING_RULES}
 
 Respond ONLY with valid JSON in the same format as before.
 """
@@ -186,12 +218,21 @@ class Planner:
             lines.append(f"  - {name}: {info['description']}")
         return "\n".join(lines)
 
-    def plan(self, goal: str) -> TaskPlan:
+    def plan(self, goal: str, conversation_context: str = "") -> TaskPlan:
         """
         Creates a TaskPlan from a goal string.
 
         Args:
-            goal: Plain English description of what to accomplish.
+            goal:                 Plain English description of what to accomplish.
+            conversation_context: Recent transcript lines, used to resolve
+                                  ambiguous references in the goal ("that",
+                                  "this project") that the goal text alone
+                                  can't disambiguate. Without this, the
+                                  planner has no way to know what "that"
+                                  refers to and may invent an unnecessary
+                                  task (e.g. asking memory_agent to "retrieve"
+                                  something that's actually just a reference
+                                  to what was discussed a moment ago).
 
         Returns:
             TaskPlan containing ordered Task objects.
@@ -201,7 +242,7 @@ class Planner:
 
         print(f"\n[planner] Planning goal: {goal[:80]}{'...' if len(goal) > 80 else ''}")
 
-        prompt = _build_planning_prompt(goal, self._agent_descriptions)
+        prompt = _build_planning_prompt(goal, self._agent_descriptions, conversation_context)
 
         try:
             data  = structured(prompt=prompt, max_tokens=1024)
@@ -224,8 +265,9 @@ class Planner:
         self,
         original_goal:     str,
         completed_tasks:   list[Task],
-        failed_tasks:      list[Task],
-        failure_reason:    str,
+        failed_tasks:          list[Task],
+        failure_reason:        str,
+        conversation_context:  str = "",
     ) -> TaskPlan:
         """
         Creates a new TaskPlan for the remaining work after partial failure.
@@ -234,10 +276,15 @@ class Planner:
         been achieved and the plan needs revision.
 
         Args:
-            original_goal:   The user's original goal string.
-            completed_tasks: Tasks that finished successfully.
-            failed_tasks:    Tasks that failed (tells the LLM what went wrong).
-            failure_reason:  The Critic's explanation of why things failed.
+            original_goal:         The user's original goal string.
+            completed_tasks:       Tasks that finished successfully.
+            failed_tasks:          Tasks that failed (tells the LLM what went wrong).
+            failure_reason:        The Critic's explanation of why things failed.
+            conversation_context:  Recent transcript lines for resolving
+                                   ambiguous references — same purpose as
+                                   in plan(), carried through to replanning
+                                   so a retry doesn't lose the context the
+                                   original plan had.
 
         Returns:
             A new TaskPlan for the remaining work only.
@@ -260,6 +307,7 @@ class Planner:
             agent_descriptions=self._agent_descriptions,
             completed_summary=completed_summary,
             failure_reason=failure_reason,
+            conversation_context=conversation_context,
         )
 
         try:

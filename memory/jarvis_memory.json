@@ -1,8 +1,8 @@
 {
   "metadata": {
     "created": "2026-04-18T10:36:01.108165",
-    "last_updated": "2026-06-21T15:38:14.173648",
-    "total_facts": 68
+    "last_updated": "2026-06-25T13:52:05.987287",
+    "total_facts": 112
   },
   "memories": [
     {
@@ -243,7 +243,7 @@
       "added": "2026-04-20T15:39:37.626886",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user is looking for a hair styling tutorial video.",
@@ -395,7 +395,7 @@
       "added": "2026-06-20T14:36:09.983959",
       "source": "consolidation",
       "importance": 0.7,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user is interested in adding revenue-generating capabilities to their AI assistant.",
@@ -419,7 +419,7 @@
       "added": "2026-06-20T14:36:21.542311",
       "source": "consolidation",
       "importance": 0.9,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user wants to generate revenue through their AI assistant.",
@@ -443,7 +443,7 @@
       "added": "2026-06-20T14:36:52.301447",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user has a potential niche content business idea that could be monetized through ads, subscriptions, or sponsorships.",
@@ -459,7 +459,7 @@
       "added": "2026-06-20T14:37:08.661619",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user wants to create content on their e-bike build.",
@@ -499,7 +499,7 @@
       "added": "2026-06-20T14:37:23.057205",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user's goal with short-form content is to evoke emotion and aesthetic appeal rather than provide information.",
@@ -515,7 +515,7 @@
       "added": "2026-06-20T14:37:23.084586",
       "source": "consolidation",
       "importance": 0.9,
-      "access_count": 0
+      "access_count": 2
     },
     {
       "fact": "The user requires assistance with scriptwriting for long-form episodes, shot lists for cinematic reels, music selection, market research, and brand identity development.",
@@ -539,7 +539,7 @@
       "added": "2026-06-21T15:35:54.150335",
       "source": "consolidation",
       "importance": 0.8,
-      "access_count": 0
+      "access_count": 1
     },
     {
       "fact": "The user asked to write a python script.",
@@ -547,6 +547,358 @@
       "added": "2026-06-21T15:38:14.173564",
       "source": "consolidation",
       "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants a python script to print the first 20 numbers of the Fibonacci series.",
+      "category": "technical",
+      "added": "2026-06-21T17:20:56.322162",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is using DAEDALUS as their coding agent.",
+      "category": "technical",
+      "added": "2026-06-21T17:20:56.331979",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user lives at home.",
+      "category": "personal",
+      "added": "2026-06-21T17:26:05.467035",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building an e-bike with a scrambler design.",
+      "category": "projects",
+      "added": "2026-06-21T17:26:05.478471",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has sourced the frame for their e-bike project.",
+      "category": "projects",
+      "added": "2026-06-21T17:26:05.485797",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 1
+    },
+    {
+      "fact": "The user wants a repository for the project created.",
+      "category": "projects",
+      "added": "2026-06-22T13:36:02.309886",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is interested in uploading code to GitHub.",
+      "category": "preferences",
+      "added": "2026-06-22T13:36:02.317308",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a stated goal of generating revenue.",
+      "category": "goals",
+      "added": "2026-06-22T17:59:44.683671",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's preferred communication modes are email and WhatsApp.",
+      "category": "preferences",
+      "added": "2026-06-22T17:59:44.697364",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants a Communication Agent to handle their email and messages, including actively reading their inbox.",
+      "category": "projects",
+      "added": "2026-06-22T17:59:44.715925",
+      "source": "consolidation",
+      "importance": 1.0,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has multiple agents including DAEDALUS, Jarvis, Hermes, and others.",
+      "category": "personal",
+      "added": "2026-06-22T18:00:09.088528",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "Jaros is the user's name.",
+      "category": "personal",
+      "added": "2026-06-22T18:00:09.092095",
+      "source": "consolidation",
+      "importance": 1.0,
+      "access_count": 0
+    },
+    {
+      "fact": "Shivam is another name mentioned in the conversation, possibly belonging to the user or someone else involved with DAEDALUS.",
+      "category": "personal",
+      "added": "2026-06-22T18:00:09.102251",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building multiple projects, including a multi-agent AI system called JARVIS and possibly DAEDALUS.",
+      "category": "projects",
+      "added": "2026-06-22T18:00:09.128869",
+      "source": "consolidation",
+      "importance": 1.0,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to track expenses and monitor opportunities for revenue generation.",
+      "category": "goals",
+      "added": "2026-06-22T18:00:09.140809",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user uses the Gmail API or IMAP for email management.",
+      "category": "technical",
+      "added": "2026-06-22T18:00:09.150413",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building an e-bike, and the Vision Agent would be useful for analyzing images related to it.",
+      "category": "projects",
+      "added": "2026-06-22T18:00:25.975349",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a Greek-themed naming convention for their agents, with names like JARVIS (DAEDALUS) and Hermes.",
+      "category": "personal",
+      "added": "2026-06-22T18:00:26.002434",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a sister who is in class 10th.",
+      "category": "personal",
+      "added": "2026-06-24T17:46:16.098874",
+      "source": "consolidation",
+      "importance": 0.4,
+      "access_count": 0
+    },
+    {
+      "fact": "None",
+      "category": "personal",
+      "added": "2026-06-24T17:46:23.986251",
+      "source": "consolidation",
+      "importance": 0.0,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is asking about travel time between Mumbai and Pune.",
+      "category": "queries",
+      "added": "2026-06-24T17:49:19.445188",
+      "source": "consolidation",
+      "importance": 0.1,
+      "access_count": 0
+    },
+    {
+      "fact": "The distance from Mumbai to Pune is approximately 150 kilometres by road.",
+      "category": "geography",
+      "added": "2026-06-24T17:49:19.456101",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is asking about someone named Calliope.",
+      "category": "personal",
+      "added": "2026-06-24T22:14:31.912394",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's sister is in 10th grade.",
+      "category": "personal",
+      "added": "2026-06-24T22:14:31.918668",
+      "source": "consolidation",
+      "importance": 0.4,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's sister has to study the chapter sectors of Indian economy, based on NCRT textbooks.",
+      "category": "projects",
+      "added": "2026-06-24T22:14:31.934710",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has a sibling (sister) who needs help with exams.",
+      "category": "personal",
+      "added": "2026-06-25T12:28:05.714668",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is making a school social media content engine.",
+      "category": "projects",
+      "added": "2026-06-25T13:50:52.534238",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The project uses AI for generating posts.",
+      "category": "technical",
+      "added": "2026-06-25T13:50:52.542489",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is using Python as the programming language for the project.",
+      "category": "technical",
+      "added": "2026-06-25T13:50:52.553298",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "Jinja2 is being used for making HTML templates with custom CSS.",
+      "category": "technical",
+      "added": "2026-06-25T13:50:52.562599",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has started building the project and done some basic planning.",
+      "category": "projects",
+      "added": "2026-06-25T13:50:52.574139",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is charging schools a monthly subscription for using the engine.",
+      "category": "financial",
+      "added": "2026-06-25T13:50:52.586336",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's name is not mentioned.",
+      "category": "personal",
+      "added": "2026-06-25T13:51:20.635797",
+      "source": "consolidation",
+      "importance": 0.3,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is currently working on a project to create a school social media content engine using AI and cloud API.",
+      "category": "projects",
+      "added": "2026-06-25T13:51:20.670337",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has chosen Jinja 2 for making HTML templates with custom CSS.",
+      "category": "technical",
+      "added": "2026-06-25T13:51:20.711623",
+      "source": "consolidation",
+      "importance": 0.5,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is planning to use Claude Sonnet 4.6 as the AI model for the project.",
+      "category": "technical",
+      "added": "2026-06-25T13:51:20.736796",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user's primary concern is making the templates look premium and not like they were created by a newbie developer.",
+      "category": "preferences",
+      "added": "2026-06-25T13:51:20.775917",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is building the project in Python, using Jinja2 for HTML templates and custom CSS.",
+      "category": "technical",
+      "added": "2026-06-25T13:51:47.916287",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user plans to use a headless browser to render templates and take screenshots.",
+      "category": "technical",
+      "added": "2026-06-25T13:51:47.935359",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user is using AI to fill Jinja2 template fields, with the config file storing school-specific details.",
+      "category": "projects",
+      "added": "2026-06-25T13:51:47.958431",
+      "source": "consolidation",
+      "importance": 0.8,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants to generate PNG images for social media posts directly from templates.",
+      "category": "technical",
+      "added": "2026-06-25T13:51:47.975463",
+      "source": "consolidation",
+      "importance": 0.6,
+      "access_count": 0
+    },
+    {
+      "fact": "The user has chosen a clean architecture with separate layers for content calendar, generation, and approval.",
+      "category": "projects",
+      "added": "2026-06-25T13:51:47.997662",
+      "source": "consolidation",
+      "importance": 0.9,
+      "access_count": 0
+    },
+    {
+      "fact": "The user plans to use Claude Sonnet 4.6 for the AI layer of their product.",
+      "category": "technical",
+      "added": "2026-06-25T13:52:05.952754",
+      "source": "consolidation",
+      "importance": 0.7,
+      "access_count": 0
+    },
+    {
+      "fact": "The user wants Daedalus to create a reference HTML and CSS template for their product, specifically for a competition achievement post of a student.",
+      "category": "projects",
+      "added": "2026-06-25T13:52:05.987278",
+      "source": "consolidation",
+      "importance": 0.7,
       "access_count": 0
     }
   ]

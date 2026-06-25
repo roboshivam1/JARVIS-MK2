@@ -2,11 +2,6 @@
 # agents/scribe_agent.py — CALLIOPE, The Scribe Agent
 # =============================================================================
 #
-#  dP""b8    db    88     88     88  dP"Yb  88""Yb 888888
-# dP   `"   dPYb   88     88     88 dP   Yb 88__dP 88__  
-# Yb       dP__Yb  88  .o 88  .o 88 Yb   dP 88"""  88""  
-#  YboodP dP""""Yb 88ood8 88ood8 88  YbodP  88     888888
-#
 # GREEK LORE:
 # Calliope is the Muse of eloquence and epic poetry — chief among the nine
 # Muses in Greek mythology. Her name means "beautiful voice." She presided
@@ -56,7 +51,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agents.base_agent import BaseAgent
-from config import WORKSPACE_DIR, CALLIOPE_MODEL, CALLIOPE_PROVIDER
+from config import WORKSPACE_DIR, CALLIOPE_MODEL, CALLIOPE_PROVIDER, CALLIOPE_MAX_TOKENS
 
 
 # =============================================================================
@@ -485,6 +480,7 @@ class ScribeAgent(BaseAgent):
             name="scribe_agent",
             model=CALLIOPE_MODEL,
             provider=CALLIOPE_PROVIDER,
+            max_tokens=CALLIOPE_MAX_TOKENS,
         )
 
     def get_system_prompt(self) -> str:

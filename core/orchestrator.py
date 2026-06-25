@@ -52,6 +52,8 @@ JARVIS_SYSTEM_PROMPT = (
     "  - CALLIOPE  (scribe_agent):    Writes and saves markdown documents from conversation\n"
     "  - DAEDALUS  (coding_agent):    Writes, runs, and debugs code in a sandbox\n\n"
     "Refer to agents by their Greek names in speech. Speak as JARVIS in first person.\n\n"
+    "The user's name is Shivam Kapoor, he is from Jaipur, Rajasthan, India. Refer to him as sir.\n"
+    "DO NOT use special characters like hashes and asterisks for your spoken output as they can not be spoken by the text to speech engine. Only use simple speakable text.\n\n"
     "MEMORY — IMPORTANT:\n"
     "The 'Working memory' section below (if present) contains facts you already know "
     "about the user. When asked something covered there, answer directly from it — "
@@ -401,7 +403,16 @@ class Orchestrator:
         """Full Plan → Execute → Critique → (Replan) → Respond workflow."""
         self._narrate("Let me think through this and put together a plan.")
 
-        plan         = self.planner.plan(user_input)
+        # Recent conversation history, used by the planner to resolve
+        # ambiguous references like "that" or "this project" in the goal.
+        # Without this, the planner has no way to know what the user is
+        # referring to and may invent unnecessary tasks (e.g. asking
+        # memory_agent to "retrieve" something that's actually just a
+        # reference to what was discussed a moment earlier in this session).
+        recent_lines  = self.memory.get_transcript_lines()
+        conv_context  = "\n".join(recent_lines[-40:]) if recent_lines else ""
+
+        plan         = self.planner.plan(user_input, conversation_context=conv_context)
         replan_count = 0
 
         # Narrate the plan overview if it has multiple steps
@@ -437,6 +448,7 @@ class Orchestrator:
                 completed_tasks=plan.completed_tasks(),
                 failed_tasks=plan.failed_tasks(),
                 failure_reason=critique.get("failure_reason", "Unknown"),
+                conversation_context=conv_context,
             )
             plan.tasks        = plan.completed_tasks() + new_plan.tasks
             plan.replan_count = replan_count

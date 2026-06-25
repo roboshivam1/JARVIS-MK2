@@ -95,6 +95,16 @@ VISION_MODEL        = "llava"
 CALLIOPE_MODEL    = "claude-sonnet-4-6"
 CALLIOPE_PROVIDER = "anthropic"
 
+# Per-tool-call token budget for CALLIOPE. The system default (1024, set in
+# core/llm.py) is sized for short tool arguments. write_document's "content"
+# argument IS a full markdown document — a real project brief easily runs
+# 800-1500+ words, which alone exceeds 1024 tokens before accounting for
+# the rest of the tool call's JSON structure. Same failure mode as
+# DAEDALUS_MAX_TOKENS below: a tool call that runs out of tokens mid-write
+# silently drops the incomplete final argument rather than erroring clearly,
+# which looks like the model "forgetting" to pass content at all.
+CALLIOPE_MAX_TOKENS = 4096
+
 # ── DAEDALUS (coding_agent) uses cloud model — debugging is multi-step ────────
 # causal reasoning where the gap between local and frontier models is largest.
 # A misdiagnosed bug produces confidently WORSE code, not just a weaker answer —
@@ -107,9 +117,34 @@ DAEDALUS_PROVIDER = "anthropic"
 # real debugging without letting a stuck loop run forever.
 DAEDALUS_MAX_ITERATIONS = 20
 
+# Per-tool-call token budget for DAEDALUS. The default elsewhere in the
+# system (1024, set in core/llm.py) is sized for short tool arguments —
+# a search query, a file path. It is NOT enough for write_file, whose
+# "content" argument can BE an entire Python script. If a tool call runs
+# out of tokens mid-generation, the incomplete final JSON key is silently
+# dropped rather than raising an error — this looks exactly like the model
+# "forgetting" a required argument, and repeats identically every
+# iteration since the same prompt hits the same ceiling every time.
+# 8192 gives comfortable room for realistic file sizes plus the rest of
+# the tool call's surrounding JSON.
+DAEDALUS_MAX_TOKENS = 8192
+
 # Per-command/script execution timeout (seconds). Prevents a hung or
 # infinite-looping script from blocking the agent indefinitely.
 DAEDALUS_EXEC_TIMEOUT = 30
+
+# Toggle: should DAEDALUS's git commits carry a Co-Authored-By trailer
+# disclosing AI involvement, or appear as ordinary commits under your own
+# identity with no in-message disclosure?
+#
+# True (recommended, the default) costs nothing and mirrors the convention
+# Claude Code and GitHub Copilot already use — full transparency in your
+# own commit history about which commits were agent-assisted, with zero
+# new infrastructure (no separate account, no separate credentials).
+# All commits still use YOUR git identity and push under YOUR GitHub
+# account regardless of this setting — this only controls the trailer text.
+DAEDALUS_COAUTHOR_COMMITS = True
+DAEDALUS_COAUTHOR_TRAILER = "Co-Authored-By: DAEDALUS <jarvis-agent@local>"
 
 
 # -----------------------------------------------------------------------------
@@ -119,7 +154,7 @@ DAEDALUS_EXEC_TIMEOUT = 30
 STT_MODEL       = "whisper-large-v3-turbo"
 STT_SAMPLE_RATE = 16000
 TTS_MODEL       = "kokoro"
-TTS_VOICE       = "af_sarah"
+TTS_VOICE       = "bm_george"
 TTS_FALLBACK    = "say"             # macOS built-in, zero-dependency fallback
 
 
@@ -227,7 +262,14 @@ AGENT_REGISTRY = {
             "Writes, runs, and debugs code in a sandboxed environment. Iterates "
             "until the code actually works — writes, executes, reads errors, "
             "fixes, and re-runs. Use for scripts, automation, debugging existing "
-            "code, or any task requiring real code execution."
+            "code, or any task requiring real code execution. ALSO handles git "
+            "and GitHub directly — initialising repos, committing, creating new "
+            "GitHub repositories, and pushing — all under the user's own GitHub "
+            "account via the 'gh' CLI. For any task involving an existing "
+            "sandbox project (write code, then create a repo, then push), this "
+            "single agent can handle the entire sequence end-to-end — there is "
+            "no need to involve memory_agent or browser_agent for git/GitHub "
+            "work."
         ),
         "best_for": [
             "write a script", "write code", "write a function",
@@ -236,6 +278,12 @@ AGENT_REGISTRY = {
             "daedalus", "coding agent",
             "automation script", "python script",
             "build a tool", "write a program",
+            # git / GitHub — explicitly listed so this agent is the obvious
+            # choice for repository work rather than browser_agent or
+            # memory_agent being picked by default
+            "git", "github", "repository", "repo",
+            "commit", "push", "upload the code", "publish to github",
+            "create a repo", "clone",
         ],
     },
 }

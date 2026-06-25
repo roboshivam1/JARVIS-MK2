@@ -34,6 +34,7 @@ import queue
 import sys
 import re
 import random
+import time
 
 from config import ensure_directories
 from memory.long_term import MemoryVault
