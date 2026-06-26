@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Callable, Optional
 
@@ -52,8 +53,6 @@ JARVIS_SYSTEM_PROMPT = (
     "  - CALLIOPE  (scribe_agent):    Writes and saves markdown documents from conversation\n"
     "  - DAEDALUS  (coding_agent):    Writes, runs, and debugs code in a sandbox\n\n"
     "Refer to agents by their Greek names in speech. Speak as JARVIS in first person.\n\n"
-    "The user's name is Shivam Kapoor, he is from Jaipur, Rajasthan, India. Refer to him as sir.\n"
-    "DO NOT use special characters like hashes and asterisks for your spoken output as they can not be spoken by the text to speech engine. Only use simple speakable text.\n\n"
     "MEMORY — IMPORTANT:\n"
     "The 'Working memory' section below (if present) contains facts you already know "
     "about the user. When asked something covered there, answer directly from it — "
@@ -100,6 +99,35 @@ def _keyword_classify(text: str) -> str:
     if any(kw in lower for kw in _DELEGATE_KEYWORDS):
         return "delegate"
     return "direct"
+
+
+# =============================================================================
+# Remember-Shortcut Pattern
+#
+# WHY THIS EXISTS:
+# "Remember that X" is one of the most common, most unambiguous things
+# said to JARVIS — there is exactly one correct interpretation and exactly
+# one agent involved. Routing it through full classification (an LLM call)
+# and then dispatcher agent-resolution (more routing logic, possibly
+# another LLM call) is pure overhead for a phrase pattern this clear-cut.
+#
+# This regex matches optional leading "hey"/"jarvis"/"please" politeness
+# words, then "remember" + optional "that", capturing everything after as
+# the fact to store. If it matches, process() bypasses _classify() and
+# the dispatcher entirely and stores the fact directly via the shared
+# MemoryVault instance — see _try_remember_shortcut below.
+#
+# Deliberately conservative: only matches when "remember" is clearly the
+# primary verb near the start of the utterance. Something like "do you
+# remember what we discussed" should NOT match this (that's a recall
+# question, not a store request) — the pattern requires "remember" to be
+# followed directly by the fact, not preceded by "do you".
+# =============================================================================
+
+_REMEMBER_PATTERN = re.compile(
+    r"^(?:hey\s+)?(?:jarvis\s*,?\s+)?(?:please\s+)?remember\s+(?:that\s+)?(.+)$",
+    re.IGNORECASE,
+)
 
 
 # =============================================================================
@@ -229,15 +257,22 @@ class Orchestrator:
         # own context without requiring a restart
         self._maybe_refresh_working_memory()
 
-        classification = self._classify(user_input)
-        print(f"[orchestrator] Classification: {classification}")
-
-        if classification == "direct":
-            response = self._handle_direct(user_input)
-        elif classification == "delegate":
-            response = self._handle_delegate(user_input)
+        # Fast path: explicit "remember that X" requests skip classification
+        # and dispatcher routing entirely — see _try_remember_shortcut.
+        shortcut_response = self._try_remember_shortcut(user_input)
+        if shortcut_response is not None:
+            classification = "delegate"  # for logging — this IS a memory_agent action, just fast-pathed
+            response       = shortcut_response
         else:
-            response = self._handle_plan(user_input)
+            classification = self._classify(user_input)
+            print(f"[orchestrator] Classification: {classification}")
+
+            if classification == "direct":
+                response = self._handle_direct(user_input)
+            elif classification == "delegate":
+                response = self._handle_delegate(user_input)
+            else:
+                response = self._handle_plan(user_input)
 
         duration_ms = int(time.time() * 1000) - start_ms
 
@@ -321,6 +356,59 @@ class Orchestrator:
     # -------------------------------------------------------------------------
     # Mode 1: Direct
     # -------------------------------------------------------------------------
+
+    def _try_remember_shortcut(self, user_input: str) -> Optional[str]:
+        """
+        Fast path for explicit "remember that X" requests. Bypasses
+        _classify() and the dispatcher's agent-resolution entirely — we
+        already know definitively this is a memory store request, so
+        going through an LLM classification call and then agent routing
+        is pure overhead for a phrase pattern this unambiguous.
+
+        Calls self.vault.add() DIRECTLY rather than going through
+        memory_agent's own tool-call loop. This is an intentional
+        architectural shortcut: memory_agent's loop exists so an LLM can
+        decide HOW to store something (what category, what importance) —
+        but for "remember that X" there's nothing to decide. self.vault is
+        the exact same MemoryVault instance memory_agent was constructed
+        with in main.py, so this is equivalent to what memory_agent would
+        ultimately do, just without the unnecessary LLM round-trip.
+
+        Returns the spoken response string if user_input matched the
+        remember-shortcut pattern, or None if it didn't (caller should
+        fall through to normal classification).
+        """
+        match = _REMEMBER_PATTERN.match(user_input.strip())
+        if not match:
+            return None
+
+        fact = match.group(1).strip().rstrip(".")
+        if not fact:
+            return None
+
+        print(f"[orchestrator] Remember-shortcut matched: '{fact}'")
+
+        self.memory.add("user", user_input)
+
+        # importance=0.5 matches memory_agent's own store_memory tool
+        # default — keeps facts stored via either path scored consistently
+        result = self.vault.add(
+            fact=fact,
+            category="general",
+            source="conversation",
+            importance=0.5,
+        )
+
+        if result.startswith("[memory] Stored"):
+            response = f"Got it — I will remember that {fact}."
+        elif result.startswith("[memory] Already stored"):
+            response = "I already had that noted, sir."
+        else:
+            response = "I tried to remember that but ran into an issue."
+
+        self.memory.add("assistant", response)
+        self._last_agents_used = ["memory_agent"]
+        return response
 
     def _handle_direct(self, user_input: str) -> str:
         """Answers from JARVIS's own knowledge using conversation history."""

@@ -94,6 +94,43 @@ FILLER_PHRASES = [
 # tune lower if JARVIS still feels laggy, higher if fillers feel too eager.
 FILLER_TIMEOUT_SECONDS = 0.6
 
+# -----------------------------------------------------------------------------
+# Barge-In Support
+#
+# HOW often to poll for an interrupt attempt while JARVIS is speaking.
+# 100ms is frequent enough that an interrupt feels instant to a person,
+# cheap enough that it doesn't add any meaningful CPU load.
+# -----------------------------------------------------------------------------
+
+INTERRUPT_POLL_INTERVAL = 0.1
+
+
+def _check_barge_in(ears: SpeechToText, mouth: TextToSpeech) -> bool:
+    """
+    Checks whether the user is attempting to interrupt JARVIS by holding
+    the push-to-talk key while he's speaking. If so, immediately stops
+    all speech (kills active playback, clears queues) and returns True.
+
+    Returns False if no interrupt is happening — caller should continue
+    whatever it was doing.
+
+    NOTE ON THE THINK THREAD: if a barge-in happens while the orchestrator
+    is still working (think_thread still running in the background), that
+    thread is NOT forcibly cancelled — Python threads can't be safely
+    killed mid-execution. It keeps running to completion as a daemon
+    thread and its output is simply ignored once the user has moved on to
+    a new utterance (the sentence_queue it was writing into goes out of
+    scope at the next loop iteration). This is an accepted v1 limitation —
+    true cooperative cancellation of in-flight agent work would need
+    cancellation checks threaded through every agent's tool loop, which is
+    a larger feature than "let me interrupt what JARVIS is saying."
+    """
+    if ears.is_key_held():
+        print("\n[JARVIS] Interrupted — listening now.")
+        mouth.stop()
+        return True
+    return False
+
 
 # =============================================================================
 # Boot
@@ -289,14 +326,28 @@ def run_voice_loop(
             # against the queue. If nothing has arrived within
             # FILLER_TIMEOUT_SECONDS, we speak a generic filler phrase once
             # (skipped if real narration already fired via on_status — see
-            # narration_fired check) and then fall back to blocking waits
-            # for everything else. This closes the dead-air gap during
+            # narration_fired check) and then fall back to short-timeout
+            # waits for everything else. This closes the dead-air gap during
             # classification + processing without ever duplicating or
             # delaying the real response.
+            #
+            # BARGE-IN: every iteration of this loop also checks whether the
+            # user has started holding the push-to-talk key — if so, JARVIS
+            # stops talking immediately and we break out to listen, rather
+            # than finishing the current sentence or the whole response.
+            # This is why the "else" branch below uses a short timeout
+            # rather than a plain blocking get() — a fully blocking call
+            # would prevent the barge-in check from ever running while
+            # waiting for the next sentence.
             first_sentence_received = False
             filler_spoken            = False
+            interrupted              = False
 
             while True:
+                if _check_barge_in(ears, mouth):
+                    interrupted = True
+                    break
+
                 if not first_sentence_received and not filler_spoken:
                     try:
                         sentence = sentence_queue.get(timeout=FILLER_TIMEOUT_SECONDS)
@@ -308,9 +359,15 @@ def run_voice_loop(
                         filler_spoken = True
                         if not orchestrator.narration_fired.is_set():
                             mouth.speak(random.choice(FILLER_PHRASES))
-                        continue  # back to top — now takes the blocking path below
+                        continue  # back to top — now takes the short-poll path below
                 else:
-                    sentence = sentence_queue.get()  # blocking, no timeout
+                    try:
+                        # Short timeout (not a plain blocking get()) so the
+                        # barge-in check at the top of the loop keeps running
+                        # even while waiting for the next sentence to arrive.
+                        sentence = sentence_queue.get(timeout=INTERRUPT_POLL_INTERVAL)
+                    except queue.Empty:
+                        continue  # nothing new yet — loop back to check barge-in again
 
                 if sentence is None:
                     break
@@ -318,8 +375,19 @@ def run_voice_loop(
                 mouth.speak(sentence)
                 first_sentence_received = True
 
-            # Block until all audio finishes before listening again
-            mouth.wait_until_done()
+            # If interrupted mid-stream, skip the tail-end wait entirely —
+            # mouth.stop() already silenced everything and the next loop
+            # iteration will call ears.listen(), which (per stt.py's
+            # level-based design) correctly picks up the already-held key.
+            if not interrupted:
+                # All sentences have been queued — now wait for the actual
+                # audio to finish PLAYING, still checking for a late
+                # barge-in (e.g. user interrupts during the final sentence
+                # rather than partway through the response).
+                while mouth.is_speaking():
+                    if _check_barge_in(ears, mouth):
+                        break
+                    time.sleep(INTERRUPT_POLL_INTERVAL)
 
         except KeyboardInterrupt:
             print("\n[JARVIS] Keyboard interrupt. Shutting down.")
